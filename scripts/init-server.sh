@@ -219,39 +219,22 @@ MSG
   status_dns="ok"
 }
 
-ensure_docker_if_needed() {
-  if [[ "$SKIP_DOCKER" -eq 1 ]]; then
-    status_docker="skipped"
-    return
-  fi
-
-  if command -v docker >/dev/null 2>&1; then
-    status_docker="ok (already installed)"
-    return
-  fi
-
-  if command -v apt-get >/dev/null 2>&1; then
-    log "Docker not found; installing docker.io via apt (idempotent)."
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y
-    apt-get install -y docker.io
-    systemctl enable --now docker >/dev/null 2>&1 || true
-    status_docker="ok"
-  else
-    status_docker="failed"
-    die "Docker not found and automatic installation is only implemented for apt-based systems. Use --skip-docker to bypass."
-  fi
-}
-
 require_root
 cd "$ROOT_DIR"
 
 log "[1/5] Ensuring baseline server tools are present"
-"$SCRIPT_DIR/ensure-server-tools.sh"
+tools_args=()
+if [[ "$SKIP_DOCKER" -eq 1 ]]; then
+  tools_args+=(--skip-docker)
+fi
+"$SCRIPT_DIR/ensure-server-tools.sh" "${tools_args[@]}"
 status_tools="ok"
 
-log "[2/5] Ensuring Docker availability"
-ensure_docker_if_needed
+if [[ "$SKIP_DOCKER" -eq 1 ]]; then
+  status_docker="skipped"
+else
+  status_docker="ok"
+fi
 
 log "[3/5] Installing/updating Nginx site configuration"
 nginx_args=(--domain "$DOMAIN" --root "$WEB_ROOT" --email "$EMAIL")

@@ -18,8 +18,14 @@ sudo ./scripts/init-server.sh \
 
 Common options:
 - `--skip-certbot`: install tools + Nginx only (skip TLS for now).
-- `--skip-docker`: skip Docker installation/check step.
+- `--skip-docker`: skip Docker installation/enable validation step.
 - `--non-interactive`: fail instead of prompting if DNS preflight says records are not ready.
+
+Docker behavior during bootstrap:
+- By default, `scripts/init-server.sh` calls `scripts/ensure-server-tools.sh`, which installs Docker Engine in a distro-aware way and runs `systemctl enable --now docker`.
+- Debian/Ubuntu use Docker's official apt repository (`download.docker.com`) before installing `docker-ce` + related packages.
+- Other supported package managers (`dnf`, `yum`, `apk`, `pacman`, `zypper`) install Docker from distro packages.
+- Post-install checks verify both `command -v docker` and `systemctl is-active docker`.
 
 Examples:
 
@@ -187,3 +193,4 @@ python3 monitor/dashboard.py \
 
 - Point DNS A/AAAA records to your Hetzner server before running Let's Encrypt.
 - Ensure ports `80` and `443` are reachable.
+- Bootstrap scripts should run as `root`/`sudo` on a `systemd`-based server if you want Docker service auto-enable checks to pass.
