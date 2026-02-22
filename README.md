@@ -4,6 +4,42 @@ Scripts for managing a Hetzner Ubuntu LTS server running multiple websites/servi
 
 ## Scripts
 
+## Quick start / one-command init
+
+Use the canonical bootstrap script to prepare tools, install Nginx site config, and configure TLS in one command:
+
+```bash
+sudo ./scripts/init-server.sh \
+  --domain example.com \
+  --web-root /var/www/example.com/public \
+  --email admin@example.com \
+  --www
+```
+
+Common options:
+- `--skip-certbot`: install tools + Nginx only (skip TLS for now).
+- `--skip-docker`: skip Docker installation/check step.
+- `--non-interactive`: fail instead of prompting if DNS preflight says records are not ready.
+
+Examples:
+
+```bash
+# HTTP-only bootstrap, run certbot later
+sudo ./scripts/init-server.sh \
+  --domain example.com \
+  --web-root /var/www/example.com/public \
+  --email admin@example.com \
+  --skip-certbot
+
+# Run fully non-interactive (safe for automation)
+sudo ./scripts/init-server.sh \
+  --domain example.com \
+  --web-root /var/www/example.com/public \
+  --email admin@example.com \
+  --www \
+  --non-interactive
+```
+
 ### 1) Install Nginx site config for a domain
 
 ```bash
