@@ -10,6 +10,7 @@ Description:
   - Pulls website repos from GitHub.
   - Checks out configured branch.
   - Runs optional build and deploy hooks.
+  - Runs Unlighthouse metrics collection after each deployment.
 
 Config format (JSON array):
 [
@@ -18,9 +19,11 @@ Config format (JSON array):
     "repo": "git@github.com:org/marketing-site.git",
     "branch": "main",
     "workdir": "/srv/github-sites/marketing-site",
+    "site_url": "https://example.com",
     "deploy_script": "scripts/deploy.sh",
     "build_cmd": "bun install --frozen-lockfile && bun run build",
-    "post_deploy_cmd": "sudo systemctl reload nginx"
+    "post_deploy_cmd": "sudo systemctl reload nginx",
+    "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com"
   }
 ]
 USAGE
@@ -82,15 +85,45 @@ run_optional() {
   fi
 }
 
+run_unlighthouse() {
+  local site_name="$1"
+  local site_url="$2"
+  local unlighthouse_cmd="$3"
+
+  if [[ -n "$unlighthouse_cmd" && "$unlighthouse_cmd" != "null" ]]; then
+    echo "  - Running unlighthouse_cmd: $unlighthouse_cmd"
+    bash -lc "$unlighthouse_cmd"
+    return
+  fi
+
+  if [[ -z "$site_url" || "$site_url" == "null" ]]; then
+    echo "  - Skipping Unlighthouse (site_url not configured)."
+    return
+  fi
+
+  require_cmd npx
+
+  local ts report_dir
+  ts=$(date +%Y%m%d-%H%M%S)
+  report_dir="/var/log/unlighthouse/${site_name}/${ts}"
+  mkdir -p "$report_dir"
+
+  echo "  - Running Unlighthouse against $site_url"
+  echo "  - Report output: $report_dir"
+  npx --yes unlighthouse-ci@latest --site "$site_url" --output-path "$report_dir"
+}
+
 for index in $(seq 0 $((SITE_COUNT - 1))); do
   site_json=$(jq ".[$index]" "$CONFIG_PATH")
   name=$(jq -r '.name // empty' <<<"$site_json")
   repo=$(jq -r '.repo // empty' <<<"$site_json")
   branch=$(jq -r '.branch // "main"' <<<"$site_json")
   workdir=$(jq -r '.workdir // empty' <<<"$site_json")
+  site_url=$(jq -r '.site_url // empty' <<<"$site_json")
   deploy_script=$(jq -r '.deploy_script // empty' <<<"$site_json")
   build_cmd=$(jq -r '.build_cmd // empty' <<<"$site_json")
   post_deploy_cmd=$(jq -r '.post_deploy_cmd // empty' <<<"$site_json")
+  unlighthouse_cmd=$(jq -r '.unlighthouse_cmd // empty' <<<"$site_json")
 
   if [[ -z "$name" || -z "$repo" || -z "$workdir" ]]; then
     echo "Skipping invalid site entry at index $index (name/repo/workdir required)." >&2
@@ -130,6 +163,7 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   fi
 
   run_optional "$post_deploy_cmd" "post_deploy_cmd"
+  run_unlighthouse "$name" "$site_url" "$unlighthouse_cmd"
 
   echo "  - Completed $name"
   popd >/dev/null
