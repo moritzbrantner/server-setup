@@ -35,6 +35,72 @@ What it does:
 - Enables renewal timer
 - Runs `certbot renew --dry-run`
 
+### 3) Sync and deploy websites from GitHub
+
+```bash
+./scripts/sync-github-sites.sh --config deploy/sites.json
+```
+
+What it does:
+- Reads site deployment config from JSON.
+- Clones/updates each configured GitHub repo.
+- Checks out the configured branch (defaults to `main`).
+- Runs optional `build_cmd`, `deploy_script`, and `post_deploy_cmd`.
+
+#### Configure website deployment entries
+
+Copy the example file and edit values:
+
+```bash
+cp deploy/sites.example.json deploy/sites.json
+```
+
+Example entry:
+
+```json
+[
+  {
+    "name": "marketing-site",
+    "repo": "git@github.com:your-org/marketing-site.git",
+    "branch": "main",
+    "workdir": "/srv/github-sites/marketing-site",
+    "build_cmd": "bun install --frozen-lockfile && bun run build",
+    "deploy_script": "scripts/deploy.sh",
+    "post_deploy_cmd": "sudo systemctl reload nginx"
+  }
+]
+```
+
+> If your repo has a deploy script (for example `scripts/deploy.sh`), it can contain any server-side commands you want to run after pulling code.
+
+#### Trigger deploy from GitHub Actions on push to `main`
+
+In each website repository, add `.github/workflows/deploy.yml`:
+
+```yaml
+name: Deploy to Hetzner
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /path/to/server-setup
+            ./scripts/sync-github-sites.sh --config deploy/sites.json --site marketing-site
+```
+
+This gives you push-to-main deployment: every push to `main` triggers the workflow, the server pulls the latest code for that site, and optional scripts run automatically.
+
 ## Monitoring dashboard service
 
 A lightweight Python dashboard is included so you can port-forward one service in VS Code and see an overview of:
