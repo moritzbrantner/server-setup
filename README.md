@@ -35,6 +35,44 @@ What it does:
 - Enables renewal timer
 - Runs `certbot renew --dry-run`
 
+## Monitoring dashboard service
+
+A lightweight Python dashboard is included so you can port-forward one service in VS Code and see an overview of:
+- live website status + latency,
+- 24h uptime/latency analytics,
+- server metrics (load, memory, disk),
+- `nginx` and `docker` service status.
+
+### Configure websites
+
+Edit `monitor/websites.json`:
+
+```json
+[
+  {"name": "Main site", "url": "https://example.com", "timeout": 5},
+  {"name": "API", "url": "https://example.com/health", "timeout": 5}
+]
+```
+
+### Run
+
+```bash
+python3 monitor/dashboard.py --port 8085
+```
+
+Then forward port `8085` in VS Code and open the forwarded URL.
+
+Optional flags:
+
+```bash
+python3 monitor/dashboard.py \
+  --config monitor/websites.json \
+  --db monitor/history.db \
+  --interval 30 \
+  --host 0.0.0.0 \
+  --port 8085
+```
+
 ## Notes
 
 - Point DNS A/AAAA records to your Hetzner server before running Let's Encrypt.
