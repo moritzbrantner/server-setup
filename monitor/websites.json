@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Main site",
+    "url": "https://example.com",
+    "timeout": 5
+  },
+  {
+    "name": "API",
+    "url": "https://example.com/health",
+    "timeout": 5
+  }
+]
