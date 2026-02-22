@@ -46,6 +46,7 @@ What it does:
 - Clones/updates each configured GitHub repo.
 - Checks out the configured branch (defaults to `main`).
 - Runs optional `build_cmd`, `deploy_script`, and `post_deploy_cmd`.
+- Runs Unlighthouse after deployment to collect website metrics.
 
 #### Configure website deployment entries
 
@@ -64,12 +65,19 @@ Example entry:
     "repo": "git@github.com:your-org/marketing-site.git",
     "branch": "main",
     "workdir": "/srv/github-sites/marketing-site",
+    "site_url": "https://example.com",
     "build_cmd": "bun install --frozen-lockfile && bun run build",
     "deploy_script": "scripts/deploy.sh",
-    "post_deploy_cmd": "sudo systemctl reload nginx"
+    "post_deploy_cmd": "sudo systemctl reload nginx",
+    "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com"
   }
 ]
 ```
+
+Unlighthouse behavior:
+- `site_url` enables the built-in Unlighthouse step (run after `post_deploy_cmd`).
+- `unlighthouse_cmd` is optional and overrides the default command when set.
+- Default report output path is `/var/log/unlighthouse/<site-name>/<timestamp>`.
 
 > If your repo has a deploy script (for example `scripts/deploy.sh`), it can contain any server-side commands you want to run after pulling code.
 
