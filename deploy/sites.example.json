@@ -1,0 +1,11 @@
+[
+  {
+    "name": "marketing-site",
+    "repo": "git@github.com:your-org/marketing-site.git",
+    "branch": "main",
+    "workdir": "/srv/github-sites/marketing-site",
+    "build_cmd": "bun install --frozen-lockfile && bun run build",
+    "deploy_script": "scripts/deploy.sh",
+    "post_deploy_cmd": "sudo systemctl reload nginx"
+  }
+]
