@@ -23,6 +23,8 @@ Config format (JSON array):
     "deploy_script": "scripts/deploy.sh",
     "build_cmd": "bun install --frozen-lockfile && bun run build",
     "post_deploy_cmd": "sudo systemctl reload nginx",
+    "unlighthouse_server_url": "http://127.0.0.1:5678",
+    "unlighthouse_server_token": "replace-with-your-token",
     "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com"
   }
 ]
@@ -89,6 +91,8 @@ run_unlighthouse() {
   local site_name="$1"
   local site_url="$2"
   local unlighthouse_cmd="$3"
+  local unlighthouse_server_url="$4"
+  local unlighthouse_server_token="$5"
 
   if [[ -n "$unlighthouse_cmd" && "$unlighthouse_cmd" != "null" ]]; then
     echo "  - Running unlighthouse_cmd: $unlighthouse_cmd"
@@ -110,7 +114,19 @@ run_unlighthouse() {
 
   echo "  - Running Unlighthouse against $site_url"
   echo "  - Report output: $report_dir"
-  npx --yes unlighthouse-ci@latest --site "$site_url" --output-path "$report_dir"
+
+  local cmd=(npx --yes unlighthouse-ci@latest --site "$site_url" --output-path "$report_dir")
+
+  if [[ -n "$unlighthouse_server_url" && "$unlighthouse_server_url" != "null" ]]; then
+    echo "  - Uploading report to Unlighthouse server: $unlighthouse_server_url"
+    cmd+=(--server "$unlighthouse_server_url" --build-name "$site_name")
+
+    if [[ -n "$unlighthouse_server_token" && "$unlighthouse_server_token" != "null" ]]; then
+      cmd+=(--auth "$unlighthouse_server_token")
+    fi
+  fi
+
+  "${cmd[@]}"
 }
 
 for index in $(seq 0 $((SITE_COUNT - 1))); do
@@ -124,6 +140,16 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   build_cmd=$(jq -r '.build_cmd // empty' <<<"$site_json")
   post_deploy_cmd=$(jq -r '.post_deploy_cmd // empty' <<<"$site_json")
   unlighthouse_cmd=$(jq -r '.unlighthouse_cmd // empty' <<<"$site_json")
+  unlighthouse_server_url=$(jq -r '.unlighthouse_server_url // empty' <<<"$site_json")
+  unlighthouse_server_token=$(jq -r '.unlighthouse_server_token // empty' <<<"$site_json")
+
+  if [[ -z "$unlighthouse_server_url" ]]; then
+    unlighthouse_server_url="${UNLIGHTHOUSE_SERVER_URL:-}"
+  fi
+
+  if [[ -z "$unlighthouse_server_token" ]]; then
+    unlighthouse_server_token="${UNLIGHTHOUSE_SERVER_TOKEN:-}"
+  fi
 
   if [[ -z "$name" || -z "$repo" || -z "$workdir" ]]; then
     echo "Skipping invalid site entry at index $index (name/repo/workdir required)." >&2
@@ -163,7 +189,7 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   fi
 
   run_optional "$post_deploy_cmd" "post_deploy_cmd"
-  run_unlighthouse "$name" "$site_url" "$unlighthouse_cmd"
+  run_unlighthouse "$name" "$site_url" "$unlighthouse_cmd" "$unlighthouse_server_url" "$unlighthouse_server_token"
 
   echo "  - Completed $name"
   popd >/dev/null

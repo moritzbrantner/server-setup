@@ -111,6 +111,8 @@ Example entry:
     "build_cmd": "bun install --frozen-lockfile && bun run build",
     "deploy_script": "scripts/deploy.sh",
     "post_deploy_cmd": "sudo systemctl reload nginx",
+    "unlighthouse_server_url": "http://127.0.0.1:5678",
+    "unlighthouse_server_token": "replace-with-your-token",
     "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com"
   }
 ]
@@ -119,6 +121,9 @@ Example entry:
 Unlighthouse behavior:
 - `site_url` enables the built-in Unlighthouse step (run after `post_deploy_cmd`).
 - `unlighthouse_cmd` is optional and overrides the default command when set.
+- `unlighthouse_server_url` (or `UNLIGHTHOUSE_SERVER_URL`) uploads each run to your Unlighthouse server.
+- `unlighthouse_server_token` (or `UNLIGHTHOUSE_SERVER_TOKEN`) configures auth for the upload target when required.
+- When upload is configured, the site `name` is sent as the Unlighthouse build name.
 - Default report output path is `/var/log/unlighthouse/<site-name>/<timestamp>`.
 
 > If your repo has a deploy script (for example `scripts/deploy.sh`), it can contain any server-side commands you want to run after pulling code.
@@ -150,6 +155,25 @@ jobs:
 ```
 
 This gives you push-to-main deployment: every push to `main` triggers the workflow, the server pulls the latest code for that site, and optional scripts run automatically.
+
+
+## Additional services (Docker Compose)
+
+A compose file is included for optional supporting services:
+
+```bash
+docker compose -f docker-compose.additional-services.yml up -d
+```
+
+Current services:
+- `unlighthouse-server`: receives uploaded Unlighthouse reports and persists data in the `unlighthouse_data` Docker volume.
+
+Set these environment variables before running your deploy sync script if you want all sites to upload by default:
+
+```bash
+export UNLIGHTHOUSE_SERVER_URL=http://127.0.0.1:5678
+export UNLIGHTHOUSE_SERVER_TOKEN=replace-with-your-token
+```
 
 ## Monitoring dashboard service
 

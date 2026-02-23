@@ -8,6 +8,8 @@
     "build_cmd": "bun install --frozen-lockfile && bun run build",
     "deploy_script": "scripts/deploy.sh",
     "post_deploy_cmd": "sudo systemctl reload nginx",
+    "unlighthouse_server_url": "http://127.0.0.1:5678",
+    "unlighthouse_server_token": "replace-with-your-token",
     "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com"
   }
 ]
