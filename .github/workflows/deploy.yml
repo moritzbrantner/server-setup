@@ -34,12 +34,14 @@ jobs:
 
       - name: ShellCheck lint
         run: |
-          shellcheck scripts/init-server.sh
-          shellcheck scripts/ensure-server-tools.sh
-          shellcheck scripts/harden-server.sh
-          shellcheck scripts/install-nginx-site.sh
-          shellcheck scripts/setup-letsencrypt.sh
-          shellcheck scripts/sync-github-sites.sh
+          # Allow sourcing system files like /etc/os-release in distro-detection logic.
+          shellcheck -e SC1091 \
+            scripts/init-server.sh \
+            scripts/ensure-server-tools.sh \
+            scripts/harden-server.sh \
+            scripts/install-nginx-site.sh \
+            scripts/setup-letsencrypt.sh \
+            scripts/sync-github-sites.sh
 
       - name: CLI help smoke tests
         run: |
