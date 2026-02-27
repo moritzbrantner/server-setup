@@ -20,11 +20,12 @@ Config format (JSON array):
     "branch": "main",
     "workdir": "/srv/github-sites/marketing-site",
     "site_url": "https://example.com",
+    "git_ssh_command": "ssh -i ${MARKETING_DEPLOY_KEY_PATH} -o IdentitiesOnly=yes",
     "deploy_script": "scripts/deploy.sh",
     "build_cmd": "bun install --frozen-lockfile && bun run build",
     "post_deploy_cmd": "sudo systemctl reload nginx",
-    "unlighthouse_server_url": "http://127.0.0.1:5678",
-    "unlighthouse_server_token": "replace-with-your-token",
+    "unlighthouse_server_url": "${UNLIGHTHOUSE_SERVER_URL}",
+    "unlighthouse_server_token": "${UNLIGHTHOUSE_SERVER_TOKEN}",
     "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com"
   }
 ]
@@ -87,6 +88,45 @@ run_optional() {
   fi
 }
 
+resolve_config_value() {
+  local site_name="$1"
+  local field_name="$2"
+  local raw_value="$3"
+
+  if [[ -z "$raw_value" || "$raw_value" == "null" ]]; then
+    echo "$raw_value"
+    return
+  fi
+
+  local resolved="$raw_value"
+  while [[ "$resolved" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)\} ]]; do
+    local env_var="${BASH_REMATCH[1]}"
+    local env_value="${!env_var-}"
+
+    if [[ -z "$env_value" ]]; then
+      echo "Missing required environment variable '$env_var' for site '$site_name' field '$field_name'." >&2
+      exit 1
+    fi
+
+    local token="\${${env_var}}"
+    resolved="${resolved//${token}/$env_value}"
+  done
+
+  echo "$resolved"
+}
+
+run_git() {
+  local git_ssh_command="$1"
+  shift
+
+  if [[ -n "$git_ssh_command" && "$git_ssh_command" != "null" ]]; then
+    GIT_SSH_COMMAND="$git_ssh_command" git "$@"
+    return
+  fi
+
+  git "$@"
+}
+
 run_unlighthouse() {
   local site_name="$1"
   local site_url="$2"
@@ -136,12 +176,26 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   branch=$(jq -r '.branch // "main"' <<<"$site_json")
   workdir=$(jq -r '.workdir // empty' <<<"$site_json")
   site_url=$(jq -r '.site_url // empty' <<<"$site_json")
+  git_ssh_command=$(jq -r '.git_ssh_command // empty' <<<"$site_json")
   deploy_script=$(jq -r '.deploy_script // empty' <<<"$site_json")
   build_cmd=$(jq -r '.build_cmd // empty' <<<"$site_json")
   post_deploy_cmd=$(jq -r '.post_deploy_cmd // empty' <<<"$site_json")
   unlighthouse_cmd=$(jq -r '.unlighthouse_cmd // empty' <<<"$site_json")
   unlighthouse_server_url=$(jq -r '.unlighthouse_server_url // empty' <<<"$site_json")
   unlighthouse_server_token=$(jq -r '.unlighthouse_server_token // empty' <<<"$site_json")
+
+  name=$(resolve_config_value "site-$index" "name" "$name")
+  repo=$(resolve_config_value "$name" "repo" "$repo")
+  branch=$(resolve_config_value "$name" "branch" "$branch")
+  workdir=$(resolve_config_value "$name" "workdir" "$workdir")
+  site_url=$(resolve_config_value "$name" "site_url" "$site_url")
+  git_ssh_command=$(resolve_config_value "$name" "git_ssh_command" "$git_ssh_command")
+  deploy_script=$(resolve_config_value "$name" "deploy_script" "$deploy_script")
+  build_cmd=$(resolve_config_value "$name" "build_cmd" "$build_cmd")
+  post_deploy_cmd=$(resolve_config_value "$name" "post_deploy_cmd" "$post_deploy_cmd")
+  unlighthouse_cmd=$(resolve_config_value "$name" "unlighthouse_cmd" "$unlighthouse_cmd")
+  unlighthouse_server_url=$(resolve_config_value "$name" "unlighthouse_server_url" "$unlighthouse_server_url")
+  unlighthouse_server_token=$(resolve_config_value "$name" "unlighthouse_server_token" "$unlighthouse_server_token")
 
   if [[ -z "$unlighthouse_server_url" ]]; then
     unlighthouse_server_url="${UNLIGHTHOUSE_SERVER_URL:-}"
@@ -166,14 +220,14 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   if [[ ! -d "$workdir/.git" ]]; then
     echo "  - Cloning $repo into $workdir"
     rm -rf "$workdir"
-    git clone "$repo" "$workdir"
+    run_git "$git_ssh_command" clone "$repo" "$workdir"
   fi
 
   pushd "$workdir" >/dev/null
   echo "  - Fetching latest refs"
-  git fetch --prune origin
-  git checkout "$branch"
-  git reset --hard "origin/$branch"
+  run_git "$git_ssh_command" fetch --prune origin
+  run_git "$git_ssh_command" checkout "$branch"
+  run_git "$git_ssh_command" reset --hard "origin/$branch"
 
   run_optional "$build_cmd" "build_cmd"
 
