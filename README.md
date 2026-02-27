@@ -96,7 +96,11 @@ Copy the example file and edit values:
 
 ```bash
 cp deploy/sites.example.json deploy/sites.json
+cp .env.example .env
+set -a; source .env; set +a
 ```
+
+Use `${ENV_VAR}` placeholders in `deploy/sites.json` for any secret value. The sync script will resolve placeholders at runtime and fail with a clear error if a referenced variable is missing or empty.
 
 Example entry:
 
@@ -108,15 +112,21 @@ Example entry:
     "branch": "main",
     "workdir": "/srv/github-sites/marketing-site",
     "site_url": "https://example.com",
+    "git_ssh_command": "ssh -i ${MARKETING_SITE_DEPLOY_KEY_PATH} -o IdentitiesOnly=yes",
     "build_cmd": "bun install --frozen-lockfile && bun run build",
     "deploy_script": "scripts/deploy.sh",
     "post_deploy_cmd": "sudo systemctl reload nginx",
-    "unlighthouse_server_url": "http://127.0.0.1:5678",
-    "unlighthouse_server_token": "replace-with-your-token",
+    "unlighthouse_server_url": "${UNLIGHTHOUSE_SERVER_URL}",
+    "unlighthouse_server_token": "${UNLIGHTHOUSE_SERVER_TOKEN}",
     "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com"
   }
 ]
 ```
+
+Minimal secure default for local/server usage:
+- Create a root-owned `.env` file (`chmod 600 .env`) and keep it out of version control.
+- Export variables only for the deploy command (`set -a; source .env; set +a`).
+- Store deploy SSH keys outside the repo (for example `/srv/keys/<site>-deploy`) and reference them via env vars such as `MARKETING_SITE_DEPLOY_KEY_PATH`.
 
 Unlighthouse behavior:
 - `site_url` enables the built-in Unlighthouse step (run after `post_deploy_cmd`).
@@ -156,6 +166,15 @@ jobs:
 
 This gives you push-to-main deployment: every push to `main` triggers the workflow, the server pulls the latest code for that site, and optional scripts run automatically.
 
+#### Production secret backends (recommended)
+
+For production, avoid long-lived plaintext files whenever possible. Good options:
+- **systemd `EnvironmentFile`** (simple server default): store vars in `/etc/server-setup/deploy.env` with `0600` permissions and load them from a service unit that runs sync jobs.
+- **1Password CLI**: fetch secret values at runtime (`op read ...`) and export them immediately before running `sync-github-sites.sh`.
+- **Cloud secret managers**: AWS Secrets Manager, GCP Secret Manager, or Azure Key Vault in your deploy runner.
+
+If you need a practical baseline today, use `EnvironmentFile` + restricted file permissions + dedicated deploy keys per repo.
+
 
 ## Additional services (Docker Compose)
 
@@ -171,8 +190,7 @@ Current services:
 Set these environment variables before running your deploy sync script if you want all sites to upload by default:
 
 ```bash
-export UNLIGHTHOUSE_SERVER_URL=http://127.0.0.1:5678
-export UNLIGHTHOUSE_SERVER_TOKEN=replace-with-your-token
+set -a; source .env; set +a
 ```
 
 ## Monitoring dashboard service
