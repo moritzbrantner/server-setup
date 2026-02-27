@@ -85,9 +85,9 @@ What it does:
 
 What it does:
 - Reads site deployment config from JSON.
-- Clones/updates each configured GitHub repo.
-- Checks out the configured branch (defaults to `main`).
-- Runs optional `build_cmd`, `deploy_script`, and `post_deploy_cmd`.
+- Clones each site into a timestamped release directory (for example `<releases_dir>/20260214-120102`).
+- Checks out the configured branch (defaults to `main`) and runs optional `build_cmd`/`deploy_script` in that release.
+- Captures the current release pointer, atomically switches `current_symlink` to the new release on success, then runs `post_deploy_cmd`.
 - Runs Unlighthouse after deployment to collect website metrics.
 
 #### Configure website deployment entries
@@ -111,6 +111,9 @@ Example entry:
     "repo": "git@github.com:your-org/marketing-site.git",
     "branch": "main",
     "workdir": "/srv/github-sites/marketing-site",
+    "releases_dir": "/srv/github-sites/marketing-site/releases",
+    "current_symlink": "/srv/github-sites/marketing-site/current",
+    "keep_releases": 5,
     "site_url": "https://example.com",
     "git_ssh_command": "ssh -i ${MARKETING_SITE_DEPLOY_KEY_PATH} -o IdentitiesOnly=yes",
     "build_cmd": "bun install --frozen-lockfile && bun run build",
@@ -122,6 +125,12 @@ Example entry:
   }
 ]
 ```
+
+
+Release settings:
+- `releases_dir` (optional): where timestamped releases are created. Defaults to `<workdir>/releases`.
+- `current_symlink` (optional): symlink switched to the latest successful release. Defaults to `<workdir>/current`.
+- `keep_releases` (optional): how many release directories to retain (default `5`). Cleanup preserves the active and rollback-target releases when possible.
 
 Minimal secure default for local/server usage:
 - Create a root-owned `.env` file (`chmod 600 .env`) and keep it out of version control.
@@ -137,6 +146,38 @@ Unlighthouse behavior:
 - Default report output path is `/var/log/unlighthouse/<site-name>/<timestamp>`.
 
 > If your repo has a deploy script (for example `scripts/deploy.sh`), it can contain any server-side commands you want to run after pulling code.
+
+#### Deployment runbook (operations)
+
+Deploy one site:
+
+```bash
+./scripts/sync-github-sites.sh --config deploy/sites.json --site marketing-site
+```
+
+Deploy all configured sites:
+
+```bash
+./scripts/sync-github-sites.sh --config deploy/sites.json
+```
+
+Verify active release on server:
+
+```bash
+readlink -f /srv/github-sites/marketing-site/current
+ls -1 /srv/github-sites/marketing-site/releases
+```
+
+Rollback quickly to previous release:
+
+```bash
+./scripts/sync-github-sites.sh --config deploy/sites.json --rollback marketing-site
+```
+
+Cleanup behavior:
+- Cleanup runs automatically after successful deploys.
+- The script removes old release directories beyond `keep_releases` while attempting to keep both the active release and the rollback target (`.previous_release`).
+- Rollback metadata is stored at `<releases_dir>/.previous_release` and updated on every successful switch and rollback.
 
 #### Trigger deploy from GitHub Actions on push to `main`
 
