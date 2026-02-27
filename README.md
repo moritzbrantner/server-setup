@@ -19,7 +19,14 @@ sudo ./scripts/init-server.sh \
 Common options:
 - `--skip-certbot`: install tools + Nginx only (skip TLS for now).
 - `--skip-docker`: skip Docker installation/enable validation step.
+- `--skip-hardening`: skip host hardening (`sshd`, `ufw`, `fail2ban`, unattended upgrades).
 - `--non-interactive`: fail instead of prompting if DNS preflight says records are not ready.
+
+
+Hardening behavior during bootstrap:
+- By default, `scripts/init-server.sh` runs `scripts/harden-server.sh` immediately after tool installation.
+- Hardening is idempotent and applies: SSH daemon defaults, unattended security updates, fail2ban for SSH, and UFW default-deny incoming with explicit allow rules for SSH/HTTP/HTTPS.
+- `--skip-hardening` is available if you want to defer firewall/SSH changes for a maintenance window.
 
 Docker behavior during bootstrap:
 - By default, `scripts/init-server.sh` calls `scripts/ensure-server-tools.sh`, which installs Docker Engine in a distro-aware way and runs `systemctl enable --now docker`.
@@ -45,6 +52,37 @@ sudo ./scripts/init-server.sh \
   --www \
   --non-interactive
 ```
+
+### 0) Harden server baseline (SSH/UFW/fail2ban/auto-updates)
+
+```bash
+sudo ./scripts/harden-server.sh
+```
+
+What it does:
+- Writes `/etc/ssh/sshd_config.d/99-server-setup-hardening.conf` with hardened defaults, including `PasswordAuthentication no`, then validates config with `sshd -t` before restart.
+- Enables unattended upgrades via apt periodic config.
+- Installs/configures fail2ban with an active `sshd` jail.
+- Enforces UFW defaults (`deny incoming`, `allow outgoing`) and explicit allow rules for `OpenSSH`, `80/tcp`, `443/tcp`.
+
+Preconditions (to prevent remote lockout):
+- Ensure you already have working SSH key-based access to the server before disabling password auth.
+- Keep your current SSH session open while applying hardening and test a second login before disconnecting.
+- If you are remote and not ready to change SSH/firewall policy yet, run `init-server.sh --skip-hardening` and apply hardening later.
+
+Recovery steps if SSH access is interrupted:
+1. Use your hosting provider's console/KVM/rescue mode to get shell access.
+2. Re-enable temporary password auth or relax SSH settings by editing `/etc/ssh/sshd_config.d/99-server-setup-hardening.conf`.
+3. Validate and restart SSH:
+   ```bash
+   sudo sshd -t && sudo systemctl restart ssh
+   ```
+4. Confirm UFW rules include SSH access (adjust CIDR/IP if needed):
+   ```bash
+   sudo ufw status verbose
+   sudo ufw allow OpenSSH
+   sudo ufw reload
+   ```
 
 ### 1) Install Nginx site config for a domain
 

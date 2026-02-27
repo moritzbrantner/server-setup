@@ -11,13 +11,15 @@ Usage:
     [--www] \
     [--skip-certbot] \
     [--skip-docker] \
+    [--skip-hardening] \
     [--non-interactive]
 
 Description:
   Canonical one-command server bootstrap that runs:
     1) scripts/ensure-server-tools.sh
-    2) scripts/install-nginx-site.sh
-    3) scripts/setup-letsencrypt.sh (unless --skip-certbot)
+    2) scripts/harden-server.sh (unless --skip-hardening)
+    3) scripts/install-nginx-site.sh
+    4) scripts/setup-letsencrypt.sh (unless --skip-certbot)
 
 Options:
   --domain            Required. Primary domain (example.com).
@@ -26,6 +28,7 @@ Options:
   --www               Optional. Configure www redirect and include www cert SAN.
   --skip-certbot      Optional. Skip Let's Encrypt/certbot step.
   --skip-docker       Optional. Skip Docker installation check.
+  --skip-hardening    Optional. Skip host hardening (SSH/UFW/fail2ban/unattended-upgrades).
   --non-interactive   Optional. Do not prompt for confirmation when DNS looks wrong.
   -h, --help          Show this help.
 USAGE
@@ -52,6 +55,7 @@ EMAIL=""
 INCLUDE_WWW=0
 SKIP_CERTBOT=0
 SKIP_DOCKER=0
+SKIP_HARDENING=0
 NON_INTERACTIVE=0
 
 while [[ $# -gt 0 ]]; do
@@ -80,6 +84,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_DOCKER=1
       shift
       ;;
+    --skip-hardening)
+      SKIP_HARDENING=1
+      shift
+      ;;
     --non-interactive)
       NON_INTERACTIVE=1
       shift
@@ -106,6 +114,7 @@ ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 status_tools="not-run"
 status_docker="not-run"
+status_hardening="not-run"
 status_nginx="not-run"
 status_dns="not-run"
 status_certbot="not-run"
@@ -122,6 +131,7 @@ www enabled:   $([[ "$INCLUDE_WWW" -eq 1 ]] && echo yes || echo no)
 Step status:
 - ensure-server-tools: $status_tools
 - docker check/install: $status_docker
+- harden-server:       $status_hardening
 - install-nginx-site:  $status_nginx
 - dns preflight:       $status_dns
 - setup-letsencrypt:   $status_certbot
@@ -234,6 +244,15 @@ if [[ "$SKIP_DOCKER" -eq 1 ]]; then
   status_docker="skipped"
 else
   status_docker="ok"
+fi
+
+if [[ "$SKIP_HARDENING" -eq 1 ]]; then
+  status_hardening="skipped"
+  log "[2/5] Hardening step skipped by --skip-hardening"
+else
+  log "[2/5] Applying server hardening defaults"
+  "$SCRIPT_DIR/harden-server.sh"
+  status_hardening="ok"
 fi
 
 log "[3/5] Installing/updating Nginx site configuration"
