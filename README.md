@@ -234,6 +234,23 @@ You can also execute checks directly:
 ./scripts/run-self-checks.sh
 ```
 
+
+### 4) Onboard a single app repository end-to-end
+
+```bash
+sudo ./scripts/onboard-app.sh \
+  --repo-url git@github.com:your-org/marketing-site.git \
+  --dest /srv/apps/marketing-site \
+  --email admin@example.com
+```
+
+What it does:
+- Clones (or updates) the repository in `--dest`.
+- Validates `server.conf` and registers/updates the app in `deploy/sites.json` without duplicating entries.
+- Deploys the app via `scripts/sync-github-sites.sh` (runtime + Nginx config generation included).
+- Acquires/updates TLS certs via `scripts/setup-letsencrypt.sh` (unless `--skip-tls`).
+- Prints a post-run summary with domain, service status, active release path, DNS state, and required manual actions.
+
 #### Optional manual JSON flow
 
 You can still manage `deploy/sites.json` directly if needed:
