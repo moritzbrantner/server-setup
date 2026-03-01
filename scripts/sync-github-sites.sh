@@ -5,6 +5,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   ./scripts/sync-github-sites.sh [--config deploy/sites.json] [--site SITE_NAME]
+  ./scripts/sync-github-sites.sh [--discover-base '/srv/apps/*'] [--config deploy/sites.json] [--site SITE_NAME]
   ./scripts/sync-github-sites.sh [--config deploy/sites.json] --rollback SITE_NAME
 
 Description:
@@ -27,6 +28,7 @@ Config format (JSON array):
     "site_url": "https://example.com",
     "git_ssh_command": "ssh -i ${MARKETING_DEPLOY_KEY_PATH} -o IdentitiesOnly=yes",
     "deploy_script": "scripts/deploy.sh",
+    "pre_deploy_cmd": "echo Preparing deploy",
     "build_cmd": "bun install --frozen-lockfile && bun run build",
     "post_deploy_cmd": "sudo systemctl reload nginx",
     "unlighthouse_server_url": "${UNLIGHTHOUSE_SERVER_URL}",
@@ -45,6 +47,7 @@ require_cmd() {
 }
 
 CONFIG_PATH="deploy/sites.json"
+DISCOVER_BASE=""
 ONLY_SITE=""
 ROLLBACK_SITE=""
 
@@ -52,6 +55,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)
       CONFIG_PATH="${2:-}"
+      shift 2
+      ;;
+    --discover-base)
+      DISCOVER_BASE="${2:-}"
       shift 2
       ;;
     --site)
@@ -81,6 +88,10 @@ fi
 
 require_cmd git
 require_cmd jq
+
+if [[ -n "$DISCOVER_BASE" ]]; then
+  ./scripts/discover-sites.sh --base-glob "$DISCOVER_BASE" --output "$CONFIG_PATH"
+fi
 
 if [[ ! -f "$CONFIG_PATH" ]]; then
   echo "Config file not found: $CONFIG_PATH" >&2
@@ -325,6 +336,7 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   site_url=$(jq -r '.site_url // empty' <<<"$site_json")
   git_ssh_command=$(jq -r '.git_ssh_command // empty' <<<"$site_json")
   deploy_script=$(jq -r '.deploy_script // empty' <<<"$site_json")
+  pre_deploy_cmd=$(jq -r '.pre_deploy_cmd // empty' <<<"$site_json")
   build_cmd=$(jq -r '.build_cmd // empty' <<<"$site_json")
   post_deploy_cmd=$(jq -r '.post_deploy_cmd // empty' <<<"$site_json")
   unlighthouse_cmd=$(jq -r '.unlighthouse_cmd // empty' <<<"$site_json")
@@ -341,6 +353,7 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   site_url=$(resolve_config_value "$name" "site_url" "$site_url")
   git_ssh_command=$(resolve_config_value "$name" "git_ssh_command" "$git_ssh_command")
   deploy_script=$(resolve_config_value "$name" "deploy_script" "$deploy_script")
+  pre_deploy_cmd=$(resolve_config_value "$name" "pre_deploy_cmd" "$pre_deploy_cmd")
   build_cmd=$(resolve_config_value "$name" "build_cmd" "$build_cmd")
   post_deploy_cmd=$(resolve_config_value "$name" "post_deploy_cmd" "$post_deploy_cmd")
   unlighthouse_cmd=$(resolve_config_value "$name" "unlighthouse_cmd" "$unlighthouse_cmd")
@@ -391,6 +404,7 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   run_git "$git_ssh_command" checkout "$branch"
   run_git "$git_ssh_command" reset --hard "origin/$branch"
 
+  run_optional "$pre_deploy_cmd" "pre_deploy_cmd"
   run_optional "$build_cmd" "build_cmd"
 
   if [[ -n "$deploy_script" ]]; then

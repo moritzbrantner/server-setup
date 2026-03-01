@@ -115,55 +115,84 @@ What it does:
 - Enables renewal timer
 - Runs `certbot renew --dry-run`
 
-### 3) Sync and deploy websites from GitHub
+### 3) Discover, sync, and deploy websites from GitHub
+
+Preferred workflow (automatic discovery + deploy):
 
 ```bash
-./scripts/sync-github-sites.sh --config deploy/sites.json
+./scripts/sync-github-sites.sh --discover-base '/srv/apps/*' --config deploy/sites.json
 ```
 
+This runs discovery first (`scripts/discover-sites.sh`), validates each app `server.conf`, writes a normalized `deploy/sites.json`, then deploys.
+
 What it does:
-- Reads site deployment config from JSON.
+- Scans each repo under `--discover-base` for `server.conf`.
+- Validates required keys and fails with explicit errors for missing/invalid data.
+- Validates uniqueness for site names and domains.
+- Normalizes each entry to deploy shape (`name`, `repo`, `branch`, release paths, hooks, service metadata).
 - Clones each site into a timestamped release directory (for example `<releases_dir>/20260214-120102`).
-- Checks out the configured branch (defaults to `main`) and runs optional `build_cmd`/`deploy_script` in that release.
+- Checks out the configured branch and runs optional `pre_deploy_cmd`, `build_cmd`, and `deploy_script` in the release.
 - Captures the current release pointer, atomically switches `current_symlink` to the new release on success, then runs `post_deploy_cmd`.
 - Runs Unlighthouse after deployment to collect website metrics.
 
-#### Configure website deployment entries
+#### Stable `server.conf` format (JSON)
 
-Copy the example file and edit values:
+Every discovered repository must include `server.conf` at the repo root with this schema:
+
+```json
+{
+  "name": "marketing-site",
+  "repo": "git@github.com:your-org/marketing-site.git",
+  "branch": "main",
+  "domain": "example.com",
+  "workdir": "/srv/github-sites/marketing-site",
+  "web_root": "public",
+  "build_output": "dist",
+  "deploy_hooks": {
+    "pre_deploy": "echo pre",
+    "build": "npm ci && npm run build",
+    "post_deploy": "sudo systemctl reload nginx"
+  },
+  "runtime": {
+    "type": "node",
+    "version": "20"
+  },
+  "service": {
+    "name": "marketing-site.service",
+    "reload_cmd": "sudo systemctl reload nginx"
+  }
+}
+```
+
+Validation rules:
+- Required keys: `name`, `repo`, `branch`, `domain`, `deploy_hooks`, `runtime`, `service`.
+- `web_root` or `build_output` must be present (either one is acceptable).
+- Required nested keys: `runtime.type`, `service.name`.
+- `name` and `domain` must be globally unique across all discovered repos.
+
+#### End-to-end example repository with `server.conf`
+
+See `examples/repositories/marketing-site/server.conf` and companion deploy hook at `examples/repositories/marketing-site/scripts/deploy.sh`.
+
+Example local run:
+
+```bash
+./scripts/discover-sites.sh --base-glob './examples/repositories/*' --output deploy/sites.json
+./scripts/sync-github-sites.sh --config deploy/sites.json --site marketing-site
+```
+
+#### Optional manual JSON flow
+
+You can still manage `deploy/sites.json` directly if needed:
 
 ```bash
 cp deploy/sites.example.json deploy/sites.json
 cp .env.example .env
 set -a; source .env; set +a
+./scripts/sync-github-sites.sh --config deploy/sites.json
 ```
 
-Use `${ENV_VAR}` placeholders in `deploy/sites.json` for any secret value. The sync script will resolve placeholders at runtime and fail with a clear error if a referenced variable is missing or empty.
-
-Example entry:
-
-```json
-[
-  {
-    "name": "marketing-site",
-    "repo": "git@github.com:your-org/marketing-site.git",
-    "branch": "main",
-    "workdir": "/srv/github-sites/marketing-site",
-    "releases_dir": "/srv/github-sites/marketing-site/releases",
-    "current_symlink": "/srv/github-sites/marketing-site/current",
-    "keep_releases": 5,
-    "site_url": "https://example.com",
-    "git_ssh_command": "ssh -i ${MARKETING_SITE_DEPLOY_KEY_PATH} -o IdentitiesOnly=yes",
-    "build_cmd": "bun install --frozen-lockfile && bun run build",
-    "deploy_script": "scripts/deploy.sh",
-    "post_deploy_cmd": "sudo systemctl reload nginx",
-    "unlighthouse_server_url": "${UNLIGHTHOUSE_SERVER_URL}",
-    "unlighthouse_server_token": "${UNLIGHTHOUSE_SERVER_TOKEN}",
-    "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com"
-  }
-]
-```
-
+Use `${ENV_VAR}` placeholders in `deploy/sites.json` for secret values. The sync script resolves placeholders at runtime and fails with a clear error if a referenced variable is missing or empty.
 
 Release settings:
 - `releases_dir` (optional): where timestamped releases are created. Defaults to `<workdir>/releases`.
