@@ -1,0 +1,9 @@
+[Unit]
+Description=Run site discovery and deployment sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/site-automation
+ExecStart=/usr/bin/env bash -lc '${REPO_ROOT}/scripts/run-discovery-deploy.sh'

@@ -30,6 +30,7 @@ Options:
   --skip-docker       Optional. Skip Docker installation check.
   --skip-hardening    Optional. Skip host hardening (SSH/UFW/fail2ban/unattended-upgrades).
   --non-interactive   Optional. Do not prompt for confirmation when DNS looks wrong.
+  --skip-automation   Optional. Skip installing/enabling discovery/deploy automation units.
   -h, --help          Show this help.
 USAGE
 }
@@ -57,6 +58,7 @@ SKIP_CERTBOT=0
 SKIP_DOCKER=0
 SKIP_HARDENING=0
 NON_INTERACTIVE=0
+AUTO_ENABLE_AUTOMATION=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -90,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --non-interactive)
       NON_INTERACTIVE=1
+      shift
+      ;;
+    --skip-automation)
+      AUTO_ENABLE_AUTOMATION=0
       shift
       ;;
     -h|--help)
@@ -229,6 +235,35 @@ MSG
   status_dns="ok"
 }
 
+
+setup_automation_units() {
+  local systemd_dir="$ROOT_DIR/ops/systemd"
+  local env_file="/etc/default/site-automation"
+
+  if [[ ! -d "$systemd_dir" ]]; then
+    log "Automation units directory not found at $systemd_dir; skipping."
+    return
+  fi
+
+  log "Installing systemd automation units"
+  install -m 0644 "$systemd_dir/site-discovery-deploy.service" /etc/systemd/system/site-discovery-deploy.service
+  install -m 0644 "$systemd_dir/site-apps-watcher.service" /etc/systemd/system/site-apps-watcher.service
+  install -m 0644 "$systemd_dir/site-webhook-receiver.service" /etc/systemd/system/site-webhook-receiver.service
+  install -m 0644 "$systemd_dir/site-discovery-deploy.timer" /etc/systemd/system/site-discovery-deploy.timer
+
+  if [[ ! -f "$env_file" ]]; then
+    install -m 0644 "$systemd_dir/site-automation.env.example" "$env_file"
+    sed -i "s|^REPO_ROOT=.*|REPO_ROOT=$ROOT_DIR|" "$env_file"
+    log "Wrote default automation environment to $env_file"
+  fi
+
+  systemctl daemon-reload
+  systemctl enable --now site-discovery-deploy.timer
+  systemctl enable --now site-apps-watcher.service
+  systemctl enable --now site-webhook-receiver.service
+  log "Automation services enabled: watcher + webhook + fallback timer"
+}
+
 require_root
 cd "$ROOT_DIR"
 
@@ -267,6 +302,12 @@ if [[ "$SKIP_CERTBOT" -eq 1 ]]; then
   status_dns="skipped"
   status_certbot="skipped"
   log "[4/5] Certbot step skipped by --skip-certbot"
+  if [[ "$AUTO_ENABLE_AUTOMATION" -eq 1 ]]; then
+    log "[extra] Installing and enabling automation services"
+    setup_automation_units
+  else
+    log "[extra] Automation services skipped by --skip-automation"
+  fi
   exit 0
 fi
 
@@ -280,3 +321,11 @@ if [[ "$INCLUDE_WWW" -eq 1 ]]; then
 fi
 "$SCRIPT_DIR/setup-letsencrypt.sh" "${certbot_args[@]}"
 status_certbot="ok"
+
+
+if [[ "$AUTO_ENABLE_AUTOMATION" -eq 1 ]]; then
+  log "[extra] Installing and enabling automation services"
+  setup_automation_units
+else
+  log "[extra] Automation services skipped by --skip-automation"
+fi

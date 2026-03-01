@@ -1,0 +1,11 @@
+[Unit]
+Description=GitHub webhook receiver for deployment trigger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/site-automation
+ExecStart=/usr/bin/env python3 ${REPO_ROOT}/scripts/webhook-receiver.py
+Restart=always
+RestartSec=2
