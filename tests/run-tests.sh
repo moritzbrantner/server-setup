@@ -103,7 +103,43 @@ JSON
   rm -rf "$tmp"
 }
 
+
+
+test_discover_normalizes_nginx_settings() {
+  local tmp
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/apps/nginx-site"
+
+  cat > "$tmp/apps/nginx-site/server.conf" <<'JSON'
+{
+  "name": "nginx-site",
+  "repo": "git@github.com:example/nginx-site.git",
+  "branch": "main",
+  "domain": "example.test",
+  "build_output": "dist",
+  "deploy_hooks": {},
+  "runtime": {
+    "mode": "static"
+  },
+  "service": {
+    "name": "nginx-site.service"
+  },
+  "nginx": {
+    "www_redirect": true,
+    "tls_hostnames": ["example.test", "www.example.test"]
+  }
+}
+JSON
+
+  "$SCRIPT" --base-glob "$tmp/apps/*" --output "$tmp/sites.json"
+
+  [[ "$(jq -r '.[0].nginx.www_redirect' "$tmp/sites.json")" == "true" ]]
+  [[ "$(jq -r '.[0].nginx.tls_hostnames | join(" ")' "$tmp/sites.json")" == "example.test www.example.test" ]]
+
+  rm -rf "$tmp"
+}
 run_test "discover auto-detects repo/branch from local clone" test_discover_from_local_clone_with_autodetect_repo_branch
 run_test "discover falls back to absolute repo path when origin is missing" test_discover_falls_back_to_absolute_path_without_origin
+run_test "discover normalizes nginx settings" test_discover_normalizes_nginx_settings
 
 echo "All tests passed: $pass_count"

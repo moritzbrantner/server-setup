@@ -36,6 +36,10 @@ Stable server.conf format (JSON):
   "service": {                                     // required object
     "name": "marketing-site.service",
     "reload_cmd": "sudo systemctl reload nginx"
+  },
+  "nginx": {
+    "www_redirect": true,                         // optional boolean
+    "tls_hostnames": ["example.com", "www.example.com"] // optional array of hostnames
   }
 }
 USAGE
@@ -152,6 +156,26 @@ for repo_dir in "${matches[@]}"; do
     exit 1
   fi
 
+  if [[ "$(jq -r '.nginx // empty | type' "$conf_path")" != "" && "$(jq -r '.nginx // empty | type' "$conf_path")" != "object" ]]; then
+    echo "Validation error in $conf_path: optional key 'nginx' must be an object when provided" >&2
+    exit 1
+  fi
+
+  if [[ "$(jq -r '.nginx.www_redirect // empty | type' "$conf_path")" != "" && "$(jq -r '.nginx.www_redirect // empty | type' "$conf_path")" != "boolean" ]]; then
+    echo "Validation error in $conf_path: optional key 'nginx.www_redirect' must be a boolean when provided" >&2
+    exit 1
+  fi
+
+  if [[ "$(jq -r '.nginx.tls_hostnames // empty | type' "$conf_path")" != "" && "$(jq -r '.nginx.tls_hostnames // empty | type' "$conf_path")" != "array" ]]; then
+    echo "Validation error in $conf_path: optional key 'nginx.tls_hostnames' must be an array when provided" >&2
+    exit 1
+  fi
+
+  if ! jq -e '(.nginx.tls_hostnames // []) | all(type == "string" and length > 0)' "$conf_path" >/dev/null; then
+    echo "Validation error in $conf_path: optional key 'nginx.tls_hostnames' must contain only non-empty strings" >&2
+    exit 1
+  fi
+
   runtime_mode="$(jq -r '.runtime.mode // empty' "$conf_path")"
   if [[ -z "$runtime_mode" ]]; then
     runtime_mode="$(jq -r '.runtime.type // empty' "$conf_path")"
@@ -206,6 +230,7 @@ for repo_dir in "${matches[@]}"; do
     --argjson deploy_hooks "$(jq -c '.deploy_hooks' "$conf_path")" \
     --argjson runtime "$(jq -c --arg mode "$runtime_mode" '.runtime + {mode: $mode}' "$conf_path")" \
     --argjson service "$(jq -c '.service' "$conf_path")" \
+    --argjson nginx "$(jq -c '.nginx // {}' "$conf_path")" \
     '{
       name: $name,
       repo: $repo,
@@ -222,6 +247,10 @@ for repo_dir in "${matches[@]}"; do
       post_deploy_cmd: ($deploy_hooks.post_deploy // ($service.reload_cmd // null)),
       runtime: $runtime,
       service: $service,
+      nginx: {
+        www_redirect: ($nginx.www_redirect // false),
+        tls_hostnames: ($nginx.tls_hostnames // [])
+      },
       source_server_conf: ($repo_dir + "/server.conf")
     }')
 
