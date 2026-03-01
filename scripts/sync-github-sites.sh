@@ -88,6 +88,7 @@ fi
 
 require_cmd git
 require_cmd jq
+require_cmd curl
 
 if [[ -n "$DISCOVER_BASE" ]]; then
   ./scripts/discover-sites.sh --base-glob "$DISCOVER_BASE" --output "$CONFIG_PATH"
@@ -193,6 +194,102 @@ run_unlighthouse() {
   fi
 
   "${cmd[@]}"
+}
+
+render_systemd_unit() {
+  local name="$1"
+  local command="$2"
+  local working_dir="$3"
+  local run_user="$4"
+  local env_file="$5"
+
+  cat <<UNIT
+[Unit]
+Description=Runtime service for ${name}
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${working_dir}
+ExecStart=/usr/bin/env bash -lc '${command}'
+Restart=always
+RestartSec=3
+User=${run_user}
+${env_file:+EnvironmentFile=${env_file}}
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
+write_if_changed() {
+  local path="$1"
+  local content="$2"
+  local tmp
+  tmp=$(mktemp)
+  printf '%s\n' "$content" >"$tmp"
+
+  if [[ -f "$path" ]] && cmp -s "$tmp" "$path"; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$path")"
+  install -m 0644 "$tmp" "$path"
+  rm -f "$tmp"
+  return 0
+}
+
+ensure_runtime_service() {
+  local site_name="$1"
+  local runtime_mode="$2"
+  local runtime_command="$3"
+  local runtime_working_dir="$4"
+  local runtime_user="$5"
+  local runtime_env_file="$6"
+
+  if [[ "$runtime_mode" != "service" ]]; then
+    return
+  fi
+
+  local unit_path="/etc/systemd/system/app-${site_name}.service"
+  local unit_content
+  unit_content=$(render_systemd_unit "$site_name" "$runtime_command" "$runtime_working_dir" "$runtime_user" "$runtime_env_file")
+
+  if write_if_changed "$unit_path" "$unit_content"; then
+    echo "  - Updated systemd unit: $unit_path"
+    systemctl daemon-reload
+    systemctl enable "app-${site_name}.service"
+    systemctl restart "app-${site_name}.service"
+  else
+    echo "  - Systemd unit unchanged: $unit_path"
+  fi
+}
+
+wait_for_service_health() {
+  local runtime_mode="$1"
+  local port="$2"
+  local endpoint="$3"
+
+  if [[ "$runtime_mode" != "service" ]]; then
+    return 0
+  fi
+
+  local url="http://127.0.0.1:${port}${endpoint}"
+  local attempts=20
+  local delay=2
+
+  echo "  - Waiting for service health: $url"
+  for _ in $(seq 1 "$attempts"); do
+    if curl --silent --show-error --fail --max-time 2 "$url" >/dev/null; then
+      echo "  - Health check passed"
+      return 0
+    fi
+    sleep "$delay"
+  done
+
+  echo "  - Health check failed: $url" >&2
+  return 1
 }
 
 atomic_switch_symlink() {
@@ -342,6 +439,13 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   unlighthouse_cmd=$(jq -r '.unlighthouse_cmd // empty' <<<"$site_json")
   unlighthouse_server_url=$(jq -r '.unlighthouse_server_url // empty' <<<"$site_json")
   unlighthouse_server_token=$(jq -r '.unlighthouse_server_token // empty' <<<"$site_json")
+  runtime_mode=$(jq -r '.runtime.mode // .runtime.type // "static"' <<<"$site_json")
+  runtime_command=$(jq -r '.runtime.command // empty' <<<"$site_json")
+  runtime_working_dir=$(jq -r '.runtime.working_dir // empty' <<<"$site_json")
+  runtime_user=$(jq -r '.runtime.user // empty' <<<"$site_json")
+  runtime_env_file=$(jq -r '.runtime.env_file // empty' <<<"$site_json")
+  runtime_port=$(jq -r '.runtime.port // empty' <<<"$site_json")
+  runtime_health_endpoint=$(jq -r '.runtime.health_endpoint // "/health"' <<<"$site_json")
 
   name=$(resolve_config_value "site-$index" "name" "$name")
   repo=$(resolve_config_value "$name" "repo" "$repo")
@@ -359,6 +463,13 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   unlighthouse_cmd=$(resolve_config_value "$name" "unlighthouse_cmd" "$unlighthouse_cmd")
   unlighthouse_server_url=$(resolve_config_value "$name" "unlighthouse_server_url" "$unlighthouse_server_url")
   unlighthouse_server_token=$(resolve_config_value "$name" "unlighthouse_server_token" "$unlighthouse_server_token")
+  runtime_mode=$(resolve_config_value "$name" "runtime.mode" "$runtime_mode")
+  runtime_command=$(resolve_config_value "$name" "runtime.command" "$runtime_command")
+  runtime_working_dir=$(resolve_config_value "$name" "runtime.working_dir" "$runtime_working_dir")
+  runtime_user=$(resolve_config_value "$name" "runtime.user" "$runtime_user")
+  runtime_env_file=$(resolve_config_value "$name" "runtime.env_file" "$runtime_env_file")
+  runtime_port=$(resolve_config_value "$name" "runtime.port" "$runtime_port")
+  runtime_health_endpoint=$(resolve_config_value "$name" "runtime.health_endpoint" "$runtime_health_endpoint")
 
   if [[ -z "$unlighthouse_server_url" ]]; then
     unlighthouse_server_url="${UNLIGHTHOUSE_SERVER_URL:-}"
@@ -371,6 +482,18 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   if [[ -z "$name" || -z "$repo" || -z "$workdir" ]]; then
     echo "Skipping invalid site entry at index $index (name/repo/workdir required)." >&2
     continue
+  fi
+
+  if [[ "$runtime_mode" != "static" && "$runtime_mode" != "service" ]]; then
+    echo "Skipping invalid site '$name': runtime.mode must be static or service." >&2
+    continue
+  fi
+
+  if [[ "$runtime_mode" == "service" ]]; then
+    if [[ -z "$runtime_command" || -z "$runtime_port" ]]; then
+      echo "Skipping invalid site '$name': service mode requires runtime.command and runtime.port." >&2
+      continue
+    fi
   fi
 
   if [[ -n "$ONLY_SITE" && "$ONLY_SITE" != "$name" ]]; then
@@ -387,6 +510,14 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
 
   echo "==> Syncing site: $name"
   mkdir -p "$workdir" "$releases_dir"
+
+  if [[ -z "$runtime_working_dir" ]]; then
+    runtime_working_dir="."
+  fi
+
+  if [[ -z "$runtime_user" ]]; then
+    runtime_user="$(id -un)"
+  fi
 
   release_ts=$(date +%Y%m%d-%H%M%S)
   release_dir="$releases_dir/${release_ts}"
@@ -418,6 +549,21 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
     "$release_dir/$deploy_script"
   fi
   popd >/dev/null
+
+  if [[ "$runtime_mode" == "service" ]]; then
+    if [[ "$runtime_working_dir" == "." ]]; then
+      runtime_working_dir="$release_dir"
+    elif [[ "$runtime_working_dir" != /* ]]; then
+      runtime_working_dir="$release_dir/$runtime_working_dir"
+    fi
+
+    ensure_runtime_service "$name" "$runtime_mode" "$runtime_command" "$runtime_working_dir" "$runtime_user" "$runtime_env_file"
+    if ! wait_for_service_health "$runtime_mode" "$runtime_port" "$runtime_health_endpoint"; then
+      echo "  - Deploy aborted before traffic switch due to failing health check." >&2
+      rm -rf "$release_dir"
+      exit 1
+    fi
+  fi
 
   previous_target=$(capture_current_target "$current_symlink")
   previous_pointer_file="${releases_dir}/.previous_release"

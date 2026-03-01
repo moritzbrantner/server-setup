@@ -25,8 +25,13 @@ Stable server.conf format (JSON):
     "post_deploy": "sudo systemctl reload nginx" // optional string
   },
   "runtime": {                                     // required object
-    "type": "node",
-    "version": "20"
+    "mode": "service",                           // required: static | service
+    "command": "npm run start",                  // required when mode=service
+    "working_dir": ".",                          // optional, default: release dir
+    "user": "www-data",                          // optional, default: current user
+    "env_file": "/etc/default/marketing-site",   // optional
+    "port": 3000,                                  // required when mode=service
+    "health_endpoint": "/healthz"                // optional, default: /health
   },
   "service": {                                     // required object
     "name": "marketing-site.service",
@@ -138,10 +143,27 @@ for repo_dir in "${matches[@]}"; do
     exit 1
   fi
 
-  runtime_type="$(jq -r '.runtime.type // empty' "$conf_path")"
+  runtime_mode="$(jq -r '.runtime.mode // empty' "$conf_path")"
+  if [[ -z "$runtime_mode" ]]; then
+    runtime_mode="$(jq -r '.runtime.type // empty' "$conf_path")"
+  fi
   service_name="$(jq -r '.service.name // empty' "$conf_path")"
-  [[ -n "$runtime_type" ]] || { echo "Validation error in $conf_path: missing required key 'runtime.type'" >&2; exit 1; }
+  [[ -n "$runtime_mode" ]] || { echo "Validation error in $conf_path: missing required key 'runtime.mode'" >&2; exit 1; }
   [[ -n "$service_name" ]] || { echo "Validation error in $conf_path: missing required key 'service.name'" >&2; exit 1; }
+
+  if [[ "$runtime_mode" != "static" && "$runtime_mode" != "service" ]]; then
+    echo "Validation error in $conf_path: runtime.mode must be either 'static' or 'service'" >&2
+    exit 1
+  fi
+
+  if [[ "$runtime_mode" == "service" ]]; then
+    runtime_command="$(jq -r '.runtime.command // empty' "$conf_path")"
+    runtime_port="$(jq -r '.runtime.port // empty' "$conf_path")"
+
+    [[ -n "$runtime_command" ]] || { echo "Validation error in $conf_path: missing required key 'runtime.command' for service mode" >&2; exit 1; }
+    [[ -n "$runtime_port" ]] || { echo "Validation error in $conf_path: missing required key 'runtime.port' for service mode" >&2; exit 1; }
+    [[ "$runtime_port" =~ ^[0-9]+$ ]] || { echo "Validation error in $conf_path: runtime.port must be numeric" >&2; exit 1; }
+  fi
 
   if [[ -n "${seen_names[$name]:-}" ]]; then
     echo "Validation error: duplicate site name '$name' in $conf_path and ${seen_names[$name]}" >&2
@@ -173,7 +195,7 @@ for repo_dir in "${matches[@]}"; do
     --arg build_output "$build_output" \
     --arg repo_dir "$repo_dir" \
     --argjson deploy_hooks "$(jq -c '.deploy_hooks' "$conf_path")" \
-    --argjson runtime "$(jq -c '.runtime' "$conf_path")" \
+    --argjson runtime "$(jq -c --arg mode "$runtime_mode" '.runtime + {mode: $mode}' "$conf_path")" \
     --argjson service "$(jq -c '.service' "$conf_path")" \
     '{
       name: $name,
