@@ -171,7 +171,7 @@ Every discovered repository must include `server.conf` at the repo root with thi
 ```
 
 Validation rules:
-- Required keys: `name`, `repo`, `branch`, `domain`, `deploy_hooks`, `runtime`, `service`.
+- Required keys: `name`, `domain`, `deploy_hooks`, `runtime`, `service` (`repo` and `branch` are auto-detected from Git when omitted).
 - `web_root` or `build_output` must be present (either one is acceptable).
 - Required nested keys: `runtime.mode`, `service.name`.
 - `name` and `domain` must be globally unique across all discovered repos.
@@ -195,6 +195,30 @@ Example local run:
 ```bash
 ./scripts/discover-sites.sh --base-glob './examples/repositories/*' --output deploy/sites.json
 ./scripts/sync-github-sites.sh --config deploy/sites.json --site marketing-site
+```
+
+
+### Built-in self-checks (tests + benchmark)
+
+`server-setup` now ships with its own `server.conf`, test suite, and benchmark runner so you can dogfood deployment automation by cloning this repo into your apps directory.
+
+Clone into the first server-setup checkout's apps folder:
+
+```bash
+cd /path/to/first/server-setup
+git clone <your-server-setup-repo-url> apps/server-setup
+./scripts/sync-github-sites.sh --discover-base './apps/*' --config deploy/sites.json --site server-setup-self
+```
+
+What runs for the cloned `apps/server-setup` repo:
+- `scripts/run-self-checks.sh`
+- `tests/run-tests.sh` (integration tests for discovery/autodetection behavior)
+- `benchmarks/discover-sites-benchmark.sh` (uses `hyperfine` if installed, otherwise `/usr/bin/time`)
+
+You can also execute checks directly:
+
+```bash
+./scripts/run-self-checks.sh
 ```
 
 #### Optional manual JSON flow

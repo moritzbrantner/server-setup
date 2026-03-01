@@ -119,8 +119,17 @@ for repo_dir in "${matches[@]}"; do
   build_output="$(jq -r '.build_output // empty' "$conf_path")"
 
   [[ -n "$name" ]] || { echo "Validation error in $conf_path: missing required key 'name'" >&2; exit 1; }
-  [[ -n "$repo" ]] || { echo "Validation error in $conf_path: missing required key 'repo'" >&2; exit 1; }
-  [[ -n "$branch" ]] || { echo "Validation error in $conf_path: missing required key 'branch'" >&2; exit 1; }
+  if [[ -z "$repo" ]]; then
+    repo="$(git -C "$repo_dir" config --get remote.origin.url 2>/dev/null || true)"
+    if [[ -z "$repo" ]]; then
+      repo="$(cd "$repo_dir" && pwd -P)"
+    fi
+  fi
+  if [[ -z "$branch" ]]; then
+    branch="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  fi
+  [[ -n "$repo" ]] || { echo "Validation error in $conf_path: missing required key 'repo' and could not auto-detect origin URL" >&2; exit 1; }
+  [[ -n "$branch" ]] || { echo "Validation error in $conf_path: missing required key 'branch' and could not auto-detect current branch" >&2; exit 1; }
   [[ -n "$domain" ]] || { echo "Validation error in $conf_path: missing required key 'domain'" >&2; exit 1; }
 
   if [[ -z "$web_root" && -z "$build_output" ]]; then
