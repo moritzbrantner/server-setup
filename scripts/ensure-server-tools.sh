@@ -231,7 +231,7 @@ main() {
   log 'Upgrading installed system packages'
   upgrade_system_packages
 
-  install_pkgs ca-certificates curl git jq unzip build-essential postgresql postgresql-client
+  install_pkgs ca-certificates curl git jq unzip build-essential postgresql postgresql-client inotify-tools
 
   install_or_update_bun
   install_or_update_gh

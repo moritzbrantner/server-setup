@@ -21,6 +21,7 @@ Common options:
 - `--skip-docker`: skip Docker installation/enable validation step.
 - `--skip-hardening`: skip host hardening (`sshd`, `ufw`, `fail2ban`, unattended upgrades).
 - `--non-interactive`: fail instead of prompting if DNS preflight says records are not ready.
+- `--skip-automation`: skip installing/enabling automated deploy triggers (watcher/webhook/timer).
 
 
 Hardening behavior during bootstrap:
@@ -245,6 +246,38 @@ Cleanup behavior:
 - Cleanup runs automatically after successful deploys.
 - The script removes old release directories beyond `keep_releases` while attempting to keep both the active release and the rollback target (`.previous_release`).
 - Rollback metadata is stored at `<releases_dir>/.previous_release` and updated on every successful switch and rollback.
+
+
+### 4) Automated triggers for discovery + deploy (systemd)
+
+Bootstrap now installs and enables three automation mechanisms by default on first setup (unless `--skip-automation` is used):
+
+- **Option A (watcher):** `site-apps-watcher.service` runs an inotify watcher on `/srv/apps` and triggers deploys on file change events.
+- **Option B (webhook):** `site-webhook-receiver.service` exposes a lightweight GitHub push webhook listener and triggers deploys on valid `push` events.
+- **Option C (fallback timer):** `site-discovery-deploy.timer` triggers periodic runs even if no watcher/webhook events fire.
+
+All triggers call the same `site-discovery-deploy.service`, which executes `scripts/run-discovery-deploy.sh`. That runner uses a `flock` lock file (`/var/lock/site-discovery-deploy.lock`) so overlapping events are serialized and never run concurrent deployments.
+
+Systemd unit files are in `ops/systemd/` and copied to `/etc/systemd/system/` by `scripts/init-server.sh`.
+
+Create or edit `/etc/default/site-automation` (template: `ops/systemd/site-automation.env.example`) to customize:
+
+- `REPO_ROOT`
+- `APPS_DIR` / `APPS_GLOB`
+- `DEBOUNCE_SECONDS`
+- `WEBHOOK_HOST`, `WEBHOOK_PORT`, `WEBHOOK_PATH`, `WEBHOOK_SECRET`
+
+Manual install (if needed):
+
+```bash
+sudo install -m 0644 ops/systemd/site-*.service /etc/systemd/system/
+sudo install -m 0644 ops/systemd/site-discovery-deploy.timer /etc/systemd/system/
+sudo install -m 0644 ops/systemd/site-automation.env.example /etc/default/site-automation
+sudo systemctl daemon-reload
+sudo systemctl enable --now site-apps-watcher.service
+sudo systemctl enable --now site-webhook-receiver.service
+sudo systemctl enable --now site-discovery-deploy.timer
+```
 
 #### Trigger deploy from GitHub Actions on push to `main`
 
