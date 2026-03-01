@@ -130,7 +130,7 @@ What it does:
 - Scans each repo under `--discover-base` for `server.conf`.
 - Validates required keys and fails with explicit errors for missing/invalid data.
 - Validates uniqueness for site names and domains.
-- Normalizes each entry to deploy shape (`name`, `repo`, `branch`, release paths, hooks, service metadata).
+- Normalizes each entry to deploy shape (`name`, `repo`, `branch`, release paths, hooks, service metadata, nginx metadata).
 - Clones each site into a timestamped release directory (for example `<releases_dir>/20260214-120102`).
 - Checks out the configured branch and runs optional `pre_deploy_cmd`, `build_cmd`, and `deploy_script` in the release.
 - Captures the current release pointer, atomically switches `current_symlink` to the new release on success, then runs `post_deploy_cmd`.
@@ -166,6 +166,10 @@ Every discovered repository must include `server.conf` at the repo root with thi
   "service": {
     "name": "marketing-site.service",
     "reload_cmd": "sudo systemctl reload nginx"
+  },
+  "nginx": {
+    "www_redirect": true,
+    "tls_hostnames": ["example.com", "www.example.com"]
   }
 }
 ```
@@ -175,10 +179,19 @@ Validation rules:
 - `web_root` or `build_output` must be present (either one is acceptable).
 - Required nested keys: `runtime.mode`, `service.name`.
 - `name` and `domain` must be globally unique across all discovered repos.
+- Optional `nginx.www_redirect` must be boolean; optional `nginx.tls_hostnames` must be an array of non-empty hostnames.
 
 Runtime modes:
 - `static`: static site mode. No app process is managed; Nginx serves release assets directly.
 - `service`: long-running application mode (Node/Python/etc.) behind Nginx reverse proxy. Requires `runtime.command` and `runtime.port`.
+
+Nginx rendering behavior:
+- For every deployed site, the deployer templates `/etc/nginx/sites-available/<site>.conf` and ensures a symlink in `/etc/nginx/sites-enabled/<site>.conf`.
+- `static` mode renders `root` + `try_files` serving from the new release path (`build_output` preferred, otherwise `web_root`).
+- `service` mode renders reverse-proxy rules to `http://127.0.0.1:<runtime.port>`.
+- `nginx.www_redirect: true` adds an additional `www.<domain>` redirect server block to the apex hostname.
+- `nginx.tls_hostnames` controls `server_name` hostnames (useful for TLS certificate host coverage).
+- Before reload, deploy runs `nginx -t`; if validation fails, it restores the last-known-good site config and aborts deployment for that site with clear logs.
 
 Service mode deployment behavior:
 - The deployer deterministically renders `/etc/systemd/system/app-<name>.service` from `runtime` fields.

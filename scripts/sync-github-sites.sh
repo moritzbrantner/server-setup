@@ -266,6 +266,149 @@ ensure_runtime_service() {
   fi
 }
 
+render_nginx_site_config() {
+  local site_name="$1"
+  local domain="$2"
+  local runtime_mode="$3"
+  local static_root="$4"
+  local runtime_port="$5"
+  local www_redirect="$6"
+  local tls_hostnames_csv="$7"
+
+  local server_names="$domain"
+  if [[ -n "$tls_hostnames_csv" ]]; then
+    server_names="$tls_hostnames_csv"
+  fi
+
+  local redirect_block=""
+  if [[ "$www_redirect" == "true" ]]; then
+    local www_domain="www.${domain}"
+    redirect_block=$(cat <<BLOCK
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${www_domain};
+    return 301 http://${domain}\$request_uri;
+}
+BLOCK
+)
+  fi
+
+  local location_block
+  if [[ "$runtime_mode" == "service" ]]; then
+    location_block=$(cat <<BLOCK
+    location / {
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass http://127.0.0.1:${runtime_port};
+    }
+BLOCK
+)
+  else
+    location_block=$(cat <<BLOCK
+    root ${static_root};
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+BLOCK
+)
+  fi
+
+  cat <<CONF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${server_names};
+
+${location_block}
+
+    access_log /var/log/nginx/${site_name}.access.log;
+    error_log  /var/log/nginx/${site_name}.error.log;
+}
+${redirect_block}
+CONF
+}
+
+apply_nginx_site_config() {
+  local site_name="$1"
+  local domain="$2"
+  local runtime_mode="$3"
+  local release_dir="$4"
+  local static_relative_root="$5"
+  local runtime_port="$6"
+  local www_redirect="$7"
+  local tls_hostnames_csv="$8"
+
+  local site_conf="/etc/nginx/sites-available/${site_name}.conf"
+  local site_link="/etc/nginx/sites-enabled/${site_name}.conf"
+  local default_link="/etc/nginx/sites-enabled/default"
+  local backup_conf="${site_conf}.last-good"
+  local static_root=""
+
+  if [[ "$runtime_mode" == "static" ]]; then
+    if [[ -z "$static_relative_root" ]]; then
+      echo "  - Missing static root for site '$site_name'." >&2
+      return 1
+    fi
+
+    if [[ "$static_relative_root" == "/" ]]; then
+      static_root="$release_dir"
+    else
+      static_root="$release_dir/$static_relative_root"
+    fi
+
+    if [[ ! -d "$static_root" ]]; then
+      echo "  - Static root does not exist for site '$site_name': $static_root" >&2
+      return 1
+    fi
+  fi
+
+  local conf_content
+  conf_content=$(render_nginx_site_config "$site_name" "$domain" "$runtime_mode" "$static_root" "$runtime_port" "$www_redirect" "$tls_hostnames_csv")
+
+  local had_existing=0
+  if [[ -f "$site_conf" ]]; then
+    had_existing=1
+    cp "$site_conf" "$backup_conf"
+  fi
+
+  if write_if_changed "$site_conf" "$conf_content"; then
+    echo "  - Updated Nginx site config: $site_conf"
+  else
+    echo "  - Nginx site config unchanged: $site_conf"
+  fi
+
+  ln -sfn "$site_conf" "$site_link"
+  if [[ -L "$default_link" ]]; then
+    rm -f "$default_link"
+  fi
+
+  if nginx -t; then
+    systemctl reload nginx
+    cp "$site_conf" "$backup_conf"
+    echo "  - Nginx configuration validated and reloaded"
+    return 0
+  fi
+
+  echo "  - nginx -t failed for site '$site_name'; restoring last known-good config" >&2
+  if [[ -f "$backup_conf" ]]; then
+    cp "$backup_conf" "$site_conf"
+  elif [[ "$had_existing" -eq 0 ]]; then
+    rm -f "$site_conf" "$site_link"
+  fi
+
+  if ! nginx -t >/dev/null 2>&1; then
+    echo "  - WARNING: nginx config is still invalid after restore; manual intervention required." >&2
+  fi
+
+  return 1
+}
+
 wait_for_service_health() {
   local runtime_mode="$1"
   local port="$2"
@@ -446,6 +589,11 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   runtime_env_file=$(jq -r '.runtime.env_file // empty' <<<"$site_json")
   runtime_port=$(jq -r '.runtime.port // empty' <<<"$site_json")
   runtime_health_endpoint=$(jq -r '.runtime.health_endpoint // "/health"' <<<"$site_json")
+  domain=$(jq -r '.domain // empty' <<<"$site_json")
+  web_root=$(jq -r '.web_root // empty' <<<"$site_json")
+  build_output=$(jq -r '.build_output // empty' <<<"$site_json")
+  nginx_www_redirect=$(jq -r '.nginx.www_redirect // false' <<<"$site_json")
+  nginx_tls_hostnames_csv=$(jq -r '(.nginx.tls_hostnames // []) | join(" ")' <<<"$site_json")
 
   name=$(resolve_config_value "site-$index" "name" "$name")
   repo=$(resolve_config_value "$name" "repo" "$repo")
@@ -470,6 +618,9 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
   runtime_env_file=$(resolve_config_value "$name" "runtime.env_file" "$runtime_env_file")
   runtime_port=$(resolve_config_value "$name" "runtime.port" "$runtime_port")
   runtime_health_endpoint=$(resolve_config_value "$name" "runtime.health_endpoint" "$runtime_health_endpoint")
+  domain=$(resolve_config_value "$name" "domain" "$domain")
+  web_root=$(resolve_config_value "$name" "web_root" "$web_root")
+  build_output=$(resolve_config_value "$name" "build_output" "$build_output")
 
   if [[ -z "$unlighthouse_server_url" ]]; then
     unlighthouse_server_url="${UNLIGHTHOUSE_SERVER_URL:-}"
@@ -479,8 +630,8 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
     unlighthouse_server_token="${UNLIGHTHOUSE_SERVER_TOKEN:-}"
   fi
 
-  if [[ -z "$name" || -z "$repo" || -z "$workdir" ]]; then
-    echo "Skipping invalid site entry at index $index (name/repo/workdir required)." >&2
+  if [[ -z "$name" || -z "$repo" || -z "$workdir" || -z "$domain" ]]; then
+    echo "Skipping invalid site entry at index $index (name/repo/workdir/domain required)." >&2
     continue
   fi
 
@@ -494,6 +645,11 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
       echo "Skipping invalid site '$name': service mode requires runtime.command and runtime.port." >&2
       continue
     fi
+  fi
+
+  if [[ "$runtime_mode" == "static" && -z "$web_root" && -z "$build_output" ]]; then
+    echo "Skipping invalid site '$name': static mode requires web_root or build_output." >&2
+    continue
   fi
 
   if [[ -n "$ONLY_SITE" && "$ONLY_SITE" != "$name" ]]; then
@@ -563,6 +719,17 @@ for index in $(seq 0 $((SITE_COUNT - 1))); do
       rm -rf "$release_dir"
       exit 1
     fi
+  fi
+
+  static_root_candidate="$build_output"
+  if [[ -z "$static_root_candidate" || "$static_root_candidate" == "null" ]]; then
+    static_root_candidate="$web_root"
+  fi
+
+  if ! apply_nginx_site_config "$name" "$domain" "$runtime_mode" "$release_dir" "$static_root_candidate" "$runtime_port" "$nginx_www_redirect" "$nginx_tls_hostnames_csv"; then
+    echo "  - Deploy aborted for '$name' because Nginx config validation failed." >&2
+    rm -rf "$release_dir"
+    exit 1
   fi
 
   previous_target=$(capture_current_target "$current_symlink")
