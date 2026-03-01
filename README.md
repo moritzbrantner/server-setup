@@ -155,8 +155,13 @@ Every discovered repository must include `server.conf` at the repo root with thi
     "post_deploy": "sudo systemctl reload nginx"
   },
   "runtime": {
-    "type": "node",
-    "version": "20"
+    "mode": "service",
+    "command": "npm run start",
+    "working_dir": ".",
+    "user": "www-data",
+    "env_file": "/etc/default/marketing-site",
+    "port": 3000,
+    "health_endpoint": "/healthz"
   },
   "service": {
     "name": "marketing-site.service",
@@ -168,8 +173,18 @@ Every discovered repository must include `server.conf` at the repo root with thi
 Validation rules:
 - Required keys: `name`, `repo`, `branch`, `domain`, `deploy_hooks`, `runtime`, `service`.
 - `web_root` or `build_output` must be present (either one is acceptable).
-- Required nested keys: `runtime.type`, `service.name`.
+- Required nested keys: `runtime.mode`, `service.name`.
 - `name` and `domain` must be globally unique across all discovered repos.
+
+Runtime modes:
+- `static`: static site mode. No app process is managed; Nginx serves release assets directly.
+- `service`: long-running application mode (Node/Python/etc.) behind Nginx reverse proxy. Requires `runtime.command` and `runtime.port`.
+
+Service mode deployment behavior:
+- The deployer deterministically renders `/etc/systemd/system/app-<name>.service` from `runtime` fields.
+- `systemctl daemon-reload`, `enable`, and `restart` are only run when the unit file content changes.
+- Rollout is rollback-safe: traffic (`current` symlink) is not switched until the app passes its runtime health check (`http://127.0.0.1:<port><health_endpoint>`).
+- If health check fails, the new release is discarded and the previous release remains active.
 
 #### End-to-end example repository with `server.conf`
 

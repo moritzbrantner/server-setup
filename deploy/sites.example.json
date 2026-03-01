@@ -16,6 +16,15 @@
     "post_deploy_cmd": "sudo systemctl reload nginx",
     "unlighthouse_server_url": "${UNLIGHTHOUSE_SERVER_URL}",
     "unlighthouse_server_token": "${UNLIGHTHOUSE_SERVER_TOKEN}",
-    "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com"
+    "unlighthouse_cmd": "npx --yes unlighthouse-ci@latest --site https://example.com",
+    "runtime": {
+      "mode": "service",
+      "command": "npm run start",
+      "working_dir": ".",
+      "user": "www-data",
+      "env_file": "/etc/default/marketing-site",
+      "port": 3000,
+      "health_endpoint": "/healthz"
+    }
   }
 ]
