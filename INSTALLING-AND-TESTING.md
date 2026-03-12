@@ -34,6 +34,13 @@ sudo ./scripts/init-server.sh \
   --email admin@example.com \
   --skip-certbot
 
+# Reverse proxy a local app server such as Next.js
+sudo ./scripts/init-server.sh \
+  --domain example.com \
+  --port 3000 \
+  --email admin@example.com \
+  --skip-certbot
+
 # Avoid Docker installation during bootstrap
 sudo ./scripts/init-server.sh \
   --domain example.com \
@@ -176,6 +183,12 @@ Useful sandbox commands:
 ./scripts/install-nginx-site.sh \
   --domain example.test \
   --root /var/www/example.test/public \
+  --www-redirect
+
+# Or proxy a local app already listening on port 3000
+./scripts/install-nginx-site.sh \
+  --domain example.test \
+  --port 3000 \
   --www-redirect
 ```
 

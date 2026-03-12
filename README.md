@@ -19,6 +19,7 @@ sudo ./scripts/init-server.sh \
 ```
 
 Common options:
+- `--port`: reverse proxy to a local app on `127.0.0.1:<port>` instead of serving a static directory.
 - `--skip-certbot`: install tools + Nginx only (skip TLS for now).
 - `--skip-docker`: skip Docker installation/enable validation step.
 - `--skip-hardening`: skip host hardening (`sshd`, `ufw`, `fail2ban`, unattended upgrades).
@@ -46,6 +47,13 @@ sudo ./scripts/init-server.sh \
   --web-root /var/www/example.com/public \
   --email admin@example.com \
   --skip-certbot
+
+# Reverse proxy a Next.js app already listening on port 3000
+sudo ./scripts/init-server.sh \
+  --domain example.com \
+  --port 3000 \
+  --email admin@example.com \
+  --www
 
 # Run fully non-interactive (safe for automation)
 sudo ./scripts/init-server.sh \
@@ -98,10 +106,20 @@ sudo ./scripts/install-nginx-site.sh \
 
 What it does:
 - Installs Nginx
-- Creates the web root
+- Creates the web root when `--root` is used
+- Or reverse proxies to `127.0.0.1:<port>` when `--port` is used
 - Writes `/etc/nginx/sites-available/example.com.conf`
 - Enables the site and reloads Nginx
 - Opens `Nginx Full` in UFW (if active)
+
+Example for an app server:
+
+```bash
+sudo ./scripts/install-nginx-site.sh \
+  --domain example.com \
+  --port 3000 \
+  --www-redirect
+```
 
 ### 2) Configure Let's Encrypt certificate (Certbot)
 

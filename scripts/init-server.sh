@@ -6,7 +6,7 @@ usage() {
 Usage:
   sudo ./scripts/init-server.sh \
     --domain example.com \
-    --web-root /var/www/example.com/public \
+    (--web-root /var/www/example.com/public | --port 3000) \
     --email admin@example.com \
     [--www] \
     [--skip-certbot] \
@@ -23,7 +23,8 @@ Description:
 
 Options:
   --domain            Required. Primary domain (example.com).
-  --web-root          Required. Nginx web root path.
+  --web-root          Optional. Nginx web root path for static sites.
+  --port              Optional. Reverse proxy target on 127.0.0.1 for app servers.
   --email             Required. Email for Let's Encrypt registration.
   --www               Optional. Configure www redirect and include www cert SAN.
   --skip-certbot      Optional. Skip Let's Encrypt/certbot step.
@@ -52,6 +53,7 @@ require_root() {
 
 DOMAIN=""
 WEB_ROOT=""
+PORT=""
 EMAIL=""
 INCLUDE_WWW=0
 SKIP_CERTBOT=0
@@ -68,6 +70,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --web-root)
       WEB_ROOT="${2:-}"
+      shift 2
+      ;;
+    --port)
+      PORT="${2:-}"
       shift 2
       ;;
     --email)
@@ -109,11 +115,24 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$DOMAIN" ]] || { usage; die "--domain is required."; }
-[[ -n "$WEB_ROOT" ]] || { usage; die "--web-root is required."; }
+if [[ -z "$WEB_ROOT" && -z "$PORT" ]]; then
+  usage
+  die "One of --web-root or --port is required."
+fi
+if [[ -n "$WEB_ROOT" && -n "$PORT" ]]; then
+  usage
+  die "--web-root and --port are mutually exclusive."
+fi
 [[ -n "$EMAIL" ]] || { usage; die "--email is required."; }
 
 [[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "Invalid domain '$DOMAIN'."
 [[ "$EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]] || die "Invalid email '$EMAIL'."
+if [[ -n "$PORT" && ! "$PORT" =~ ^[0-9]+$ ]]; then
+  die "Invalid port '$PORT'. Must be numeric."
+fi
+if [[ -n "$PORT" ]] && (( 10#$PORT < 1 || 10#$PORT > 65535 )); then
+  die "Invalid port '$PORT'. Must be between 1 and 65535."
+fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -126,11 +145,18 @@ status_dns="not-run"
 status_certbot="not-run"
 
 print_summary() {
+  local site_target
+  if [[ -n "$WEB_ROOT" ]]; then
+    site_target="$WEB_ROOT"
+  else
+    site_target="http://127.0.0.1:$PORT"
+  fi
+
   cat <<SUMMARY
 
 ========== init-server summary ==========
 Domain:        $DOMAIN
-Web root:      $WEB_ROOT
+Site target:   $site_target
 Email:         $EMAIL
 www enabled:   $([[ "$INCLUDE_WWW" -eq 1 ]] && echo yes || echo no)
 
@@ -291,7 +317,12 @@ else
 fi
 
 log "[3/5] Installing/updating Nginx site configuration"
-nginx_args=(--domain "$DOMAIN" --root "$WEB_ROOT" --email "$EMAIL")
+nginx_args=(--domain "$DOMAIN" --email "$EMAIL")
+if [[ -n "$WEB_ROOT" ]]; then
+  nginx_args+=(--root "$WEB_ROOT")
+else
+  nginx_args+=(--port "$PORT")
+fi
 if [[ "$INCLUDE_WWW" -eq 1 ]]; then
   nginx_args+=(--www-redirect)
 fi
