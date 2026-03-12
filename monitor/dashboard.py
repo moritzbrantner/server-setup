@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -22,7 +24,24 @@ CACHE_LOCK = threading.Lock()
 DB_LOCK = threading.Lock()
 
 
-def load_sites(config_path: Path):
+def default_config_path() -> Path:
+    deploy_path = Path("deploy/sites.json")
+    if deploy_path.exists():
+        return deploy_path
+    return Path("monitor/websites.json")
+
+
+def load_state(state_dir: Path | None, site_name: str) -> dict:
+    if state_dir is None:
+        return {}
+    path = state_dir / f"{site_name}.json"
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def load_sites(config_path: Path, state_dir: Path | None = None):
     with config_path.open("r", encoding="utf-8") as f:
         sites = json.load(f)
 
@@ -33,12 +52,28 @@ def load_sites(config_path: Path):
     for idx, site in enumerate(sites):
         if not isinstance(site, dict):
             raise ValueError(f"Site at index {idx} must be an object.")
+
         name = site.get("name")
-        url = site.get("url")
-        if not name or not url:
-            raise ValueError(f"Site at index {idx} must include name and url.")
+        if not name:
+            raise ValueError(f"Site at index {idx} must include name.")
+
+        url = site.get("url") or site.get("site_url")
+        if not url and site.get("domain"):
+            url = f"https://{site['domain']}"
+        if not url:
+            raise ValueError(f"Site at index {idx} must include url/site_url/domain.")
+
         timeout = float(site.get("timeout", 5))
-        normalized.append({"name": name, "url": url, "timeout": timeout})
+        deploy_state = load_state(state_dir, name)
+        normalized.append(
+            {
+                "name": name,
+                "url": url,
+                "timeout": timeout,
+                "deploy": deploy_state,
+                "runtime_mode": ((site.get("runtime") or {}).get("mode") or "static"),
+            }
+        )
 
     return normalized
 
@@ -85,6 +120,8 @@ def check_site(site):
                 "status_code": code,
                 "latency_ms": round(latency, 1),
                 "error": None,
+                "deploy": site.get("deploy", {}),
+                "runtime_mode": site.get("runtime_mode"),
             }
     except Exception as exc:  # noqa: BLE001
         latency = (time.perf_counter() - start) * 1000
@@ -95,6 +132,8 @@ def check_site(site):
             "status_code": None,
             "latency_ms": round(latency, 1),
             "error": str(exc),
+            "deploy": site.get("deploy", {}),
+            "runtime_mode": site.get("runtime_mode"),
         }
 
 
@@ -240,11 +279,11 @@ HTML = """<!doctype html>
   <title>Server Overview</title>
   <style>
     body { font-family: Inter, Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-    .wrap { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
     .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); }
     .card { background: #1e293b; padding: 14px; border-radius: 10px; border: 1px solid #334155; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    th, td { padding: 10px; border-bottom: 1px solid #334155; text-align: left; }
+    th, td { padding: 10px; border-bottom: 1px solid #334155; text-align: left; vertical-align: top; }
     th { color: #94a3b8; }
     .ok { color: #22c55e; font-weight: 600; }
     .bad { color: #ef4444; font-weight: 600; }
@@ -260,14 +299,14 @@ HTML = """<!doctype html>
     <div id=\"system\" class=\"cards\"></div>
 
     <h2 style=\"margin-top:20px\">Live website checks</h2>
-    <table id=\"sites\"><thead><tr><th>Website</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Error</th></tr></thead><tbody></tbody></table>
+    <table id=\"sites\"><thead><tr><th>Website</th><th>Status</th><th>Deploy</th><th>Release</th><th>Latency</th><th>Error</th></tr></thead><tbody></tbody></table>
 
     <h2 style=\"margin-top:20px\">24h analytics</h2>
     <table id=\"analytics\"><thead><tr><th>Website</th><th>Uptime</th><th>Samples</th><th>Avg latency</th><th>Max latency</th></tr></thead><tbody></tbody></table>
   </div>
   <script>
     function statusClass(ok) { return ok ? 'ok' : 'bad'; }
-    function fmt(v, suffix='') { return (v === null || v === undefined) ? 'n/a' : `${v}${suffix}`; }
+    function fmt(v, suffix='') { return (v === null || v === undefined || v === '') ? 'n/a' : `${v}${suffix}`; }
 
     async function refresh() {
       const res = await fetch('/api/overview');
@@ -291,9 +330,10 @@ HTML = """<!doctype html>
         <tr>
           <td>${site.name}<div class='muted small'>${site.url}</div></td>
           <td class='${statusClass(site.ok)}'>${site.ok ? 'UP' : 'DOWN'}</td>
-          <td>${fmt(site.status_code)}</td>
+          <td>${fmt(site.deploy?.last_deploy_status)}<div class='muted small'>health: ${fmt(site.deploy?.last_health_check?.status)}</div></td>
+          <td class='small'>${fmt(site.deploy?.current_release)}</td>
           <td>${fmt(site.latency_ms, ' ms')}</td>
-          <td class='small'>${site.error || ''}</td>
+          <td class='small'>${site.error || site.deploy?.last_failure_reason || ''}</td>
         </tr>
       `).join('');
 
@@ -317,6 +357,17 @@ HTML = """<!doctype html>
 """
 
 
+def overview_payload(db_path: Path) -> dict:
+    with CACHE_LOCK:
+        payload = {
+            "last_updated": CACHE["last_updated"],
+            "sites": CACHE["sites"],
+            "system": CACHE["system"],
+        }
+    payload["analytics"] = read_analytics(db_path)
+    return payload
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
@@ -329,14 +380,31 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/overview":
-            with CACHE_LOCK:
-                payload = {
-                    "last_updated": CACHE["last_updated"],
-                    "sites": CACHE["sites"],
-                    "system": CACHE["system"],
+            body = json.dumps(overview_payload(Path(self.server.db_path))).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/api/status":
+            overview = overview_payload(Path(self.server.db_path))
+            body = json.dumps(
+                {
+                    "last_updated": overview["last_updated"],
+                    "sites": [
+                        {
+                            "name": site["name"],
+                            "ok": site["ok"],
+                            "status_code": site["status_code"],
+                            "deploy": site.get("deploy", {}),
+                        }
+                        for site in overview["sites"]
+                    ],
                 }
-            payload["analytics"] = read_analytics(Path(self.server.db_path))
-            body = json.dumps(payload).encode("utf-8")
+            ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-cache")
@@ -353,14 +421,22 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="Simple website/server overview dashboard")
-    parser.add_argument("--config", default="monitor/websites.json", help="Path to websites config JSON")
+    parser.add_argument("--config", default=None, help="Path to websites config JSON")
     parser.add_argument("--db", default="monitor/history.db", help="Path to sqlite database")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind")
     parser.add_argument("--port", type=int, default=8085, help="Port to bind")
     parser.add_argument("--interval", type=int, default=30, help="Check interval in seconds")
+    parser.add_argument(
+        "--state-dir",
+        default=os.environ.get("STATE_DIR", "/var/lib/server-setup/state"),
+        help="Path to deploy state JSON directory",
+    )
     args = parser.parse_args()
 
-    sites = load_sites(Path(args.config))
+    config_path = Path(args.config) if args.config else default_config_path()
+    state_dir = Path(args.state_dir) if Path(args.state_dir).exists() else None
+
+    sites = load_sites(config_path, state_dir=state_dir)
     db_path = Path(args.db)
     init_db(db_path)
     start_monitor(sites, db_path, args.interval)

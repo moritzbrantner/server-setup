@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Complex Site</title>
+    <link rel="stylesheet" href="/assets/app.css">
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <main class="shell">
+      <section class="hero panel">
+        <p class="eyebrow">server-setup example</p>
+        <h1>Complex Site</h1>
+        <p class="lede">
+          A richer website example that talks to the REST API, reflects
+          Postgres-backed data, and stays useful even when the API is down.
+        </p>
+        <div class="chips">
+          <span>Node service deploy</span>
+          <span>API integration</span>
+          <span>Postgres-backed content</span>
+        </div>
+      </section>
+
+      <section class="stats">
+        <article class="panel stat">
+          <span class="label">API base URL</span>
+          <strong id="api-base">Loading...</strong>
+        </article>
+        <article class="panel stat">
+          <span class="label">Items in dashboard</span>
+          <strong id="item-count">0</strong>
+        </article>
+        <article class="panel stat">
+          <span class="label">Data status</span>
+          <strong id="data-status">Pending</strong>
+        </article>
+      </section>
+
+      <section class="content">
+        <section class="panel form-panel">
+          <h2>Add an item</h2>
+          <p>Create a record through the API and watch the dashboard update.</p>
+          <form id="item-form">
+            <label for="title">Title</label>
+            <input id="title" name="title" maxlength="120" placeholder="Describe a new sandbox task" required>
+            <button type="submit">Create item</button>
+          </form>
+          <p class="status" id="form-status">Ready.</p>
+          <div class="error hidden" id="api-error"></div>
+        </section>
+
+        <section class="panel dashboard-panel">
+          <div class="dashboard-head">
+            <div>
+              <h2>Dashboard</h2>
+              <p>These entries come from the Postgres-backed REST API.</p>
+            </div>
+            <button id="refresh-button" type="button">Refresh</button>
+          </div>
+          <div class="items" id="items"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/config.js"></script>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

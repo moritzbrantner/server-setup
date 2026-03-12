@@ -1,0 +1,55 @@
+services:
+  server-setup:
+    build:
+      context: .
+    image: server-setup-sandbox:latest
+    container_name: server-setup-sandbox
+    privileged: true
+    cgroup: host
+    stdin_open: true
+    tty: true
+    environment:
+      EXAMPLE_APPS_DIR: "${EXAMPLE_APPS_DIR:-/srv/apps}"
+      POSTGRES_HOST: test-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: server_setup
+      POSTGRES_USER: server_setup
+      POSTGRES_PASSWORD: server_setup
+      SKIP_EXAMPLE_SEED: "${SKIP_EXAMPLE_SEED:-0}"
+      SKIP_UNLIGHTHOUSE: "${SKIP_UNLIGHTHOUSE:-1}"
+      TEST_DATABASE_URL: postgres://server_setup:server_setup@test-db:5432/server_setup
+    ports:
+      - "8022:22"
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - .:/opt/server-setup
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+      - /tmp
+    depends_on:
+      test-db:
+        condition: service_healthy
+
+  test-db:
+    image: postgres:16
+    container_name: server-setup-test-db
+    environment:
+      POSTGRES_DB: server_setup
+      POSTGRES_USER: server_setup
+      POSTGRES_PASSWORD: server_setup
+    ports:
+      - "55432:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U server_setup -d server_setup"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  postgres_test_data:

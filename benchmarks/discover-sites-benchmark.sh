@@ -13,7 +13,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 mkdir -p "$tmp/apps/server-setup-bench"
-cp -R "$ROOT_DIR/." "$tmp/apps/server-setup-bench/"
+(
+  cd "$ROOT_DIR"
+  tar --exclude=.git -cf - .
+) | (
+  cd "$tmp/apps/server-setup-bench"
+  tar -xf -
+)
 
 (
   cd "$tmp/apps/server-setup-bench"

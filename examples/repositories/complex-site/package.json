@@ -1,0 +1,12 @@
+{
+  "name": "complex-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A richer website example for the server-setup sandbox",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

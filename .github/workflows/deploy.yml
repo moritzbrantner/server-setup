@@ -25,33 +25,68 @@ jobs:
 
       - name: Bash syntax checks
         run: |
+          bash -n scripts/discover-sites.sh
           bash -n scripts/init-server.sh
           bash -n scripts/ensure-server-tools.sh
           bash -n scripts/harden-server.sh
           bash -n scripts/install-nginx-site.sh
+          bash -n scripts/onboard-app.sh
+          bash -n scripts/run-discovery-deploy.sh
           bash -n scripts/setup-letsencrypt.sh
           bash -n scripts/sync-github-sites.sh
+          bash -n scripts/watch-apps-and-deploy.sh
+          bash -n tests/test_discover_sites.sh
+          bash -n tests/test_sync_github_sites.sh
+          bash -n tests/run-tests.sh
+          bash -n tests/run-python-tests.sh
 
       - name: ShellCheck lint
         run: |
           # Allow sourcing system files like /etc/os-release in distro-detection logic.
           shellcheck -e SC1091 \
+            scripts/discover-sites.sh \
             scripts/init-server.sh \
             scripts/ensure-server-tools.sh \
             scripts/harden-server.sh \
             scripts/install-nginx-site.sh \
+            scripts/onboard-app.sh \
+            scripts/run-discovery-deploy.sh \
             scripts/setup-letsencrypt.sh \
-            scripts/sync-github-sites.sh
+            scripts/sync-github-sites.sh \
+            scripts/watch-apps-and-deploy.sh \
+            tests/test_discover_sites.sh \
+            tests/test_sync_github_sites.sh \
+            tests/run-tests.sh \
+            tests/run-python-tests.sh
+
+      - name: Python compile checks
+        run: |
+          python3 -m py_compile \
+            scripts/config_contract.py \
+            scripts/webhook-receiver.py \
+            monitor/dashboard.py \
+            tests/test_webhook_receiver.py \
+            tests/test_dashboard.py
 
       - name: CLI help smoke tests
         run: |
+          ./scripts/discover-sites.sh --help
           ./scripts/init-server.sh --help
           ./scripts/ensure-server-tools.sh --help
           ./scripts/harden-server.sh --help
           ./scripts/install-nginx-site.sh --help
+          ./scripts/onboard-app.sh --help
           ./scripts/setup-letsencrypt.sh --help
           ./scripts/sync-github-sites.sh --help
           python3 monitor/dashboard.py --help
+
+      - name: Integration tests
+        run: ./tests/run-tests.sh
+
+      - name: Docker smoke test
+        run: |
+          docker build -t server-setup-test .
+          docker run --rm server-setup-test
 
   deploy:
     name: Deploy to server

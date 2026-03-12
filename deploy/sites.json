@@ -1,0 +1,123 @@
+[
+  {
+    "name": "complex-site",
+    "repo": "/srv/apps/complex-site",
+    "branch": "main",
+    "domain": "app.localhost",
+    "site_url": "https://app.localhost",
+    "workdir": "/srv/github-sites/complex-site",
+    "releases_dir": "/srv/github-sites/complex-site/releases",
+    "current_symlink": "/srv/github-sites/complex-site/current",
+    "keep_releases": 5,
+    "web_root": null,
+    "build_output": ".",
+    "deploy_script": null,
+    "pre_deploy_cmd": null,
+    "build_cmd": "npm ci --no-fund --no-audit",
+    "post_deploy_cmd": null,
+    "git_ssh_command": null,
+    "unlighthouse_server_url": null,
+    "unlighthouse_server_token": null,
+    "unlighthouse_cmd": null,
+    "runtime": {
+      "mode": "service",
+      "command": "PORT=3000 API_BASE_URL=http://api.localhost:8080 npm run start",
+      "working_dir": ".",
+      "port": 3000,
+      "health_endpoint": "/healthz",
+      "health_retries": 10,
+      "health_interval_seconds": 1,
+      "user": "root"
+    },
+    "service": {
+      "name": "complex-site.service"
+    },
+    "nginx": {
+      "www_redirect": false,
+      "tls_hostnames": [
+        "app.localhost"
+      ]
+    },
+    "source_server_conf": "/srv/apps/complex-site/server.conf"
+  },
+  {
+    "name": "rest-api",
+    "repo": "/srv/apps/rest-api",
+    "branch": "main",
+    "domain": "api.localhost",
+    "site_url": "https://api.localhost",
+    "workdir": "/srv/github-sites/rest-api",
+    "releases_dir": "/srv/github-sites/rest-api/releases",
+    "current_symlink": "/srv/github-sites/rest-api/current",
+    "keep_releases": 5,
+    "web_root": null,
+    "build_output": ".",
+    "deploy_script": null,
+    "pre_deploy_cmd": null,
+    "build_cmd": "POSTGRES_HOST=test-db POSTGRES_PORT=5432 POSTGRES_DB=server_setup POSTGRES_USER=server_setup POSTGRES_PASSWORD=server_setup ./scripts/init-db.sh",
+    "post_deploy_cmd": null,
+    "git_ssh_command": null,
+    "unlighthouse_server_url": null,
+    "unlighthouse_server_token": null,
+    "unlighthouse_cmd": null,
+    "runtime": {
+      "mode": "service",
+      "command": "PORT=4000 POSTGRES_HOST=test-db POSTGRES_PORT=5432 POSTGRES_DB=server_setup POSTGRES_USER=server_setup POSTGRES_PASSWORD=server_setup python3 app.py",
+      "working_dir": ".",
+      "port": 4000,
+      "health_endpoint": "/healthz",
+      "health_retries": 10,
+      "health_interval_seconds": 1,
+      "user": "root"
+    },
+    "service": {
+      "name": "rest-api.service"
+    },
+    "nginx": {
+      "www_redirect": false,
+      "tls_hostnames": [
+        "api.localhost"
+      ]
+    },
+    "source_server_conf": "/srv/apps/rest-api/server.conf"
+  },
+  {
+    "name": "simple-site",
+    "repo": "/srv/apps/simple-site",
+    "branch": "main",
+    "domain": "simple.localhost",
+    "site_url": "https://simple.localhost",
+    "workdir": "/srv/github-sites/simple-site",
+    "releases_dir": "/srv/github-sites/simple-site/releases",
+    "current_symlink": "/srv/github-sites/simple-site/current",
+    "keep_releases": 5,
+    "web_root": null,
+    "build_output": "public",
+    "deploy_script": null,
+    "pre_deploy_cmd": null,
+    "build_cmd": null,
+    "post_deploy_cmd": null,
+    "git_ssh_command": null,
+    "unlighthouse_server_url": null,
+    "unlighthouse_server_token": null,
+    "unlighthouse_cmd": null,
+    "runtime": {
+      "mode": "static",
+      "working_dir": ".",
+      "user": "root",
+      "health_endpoint": "/health",
+      "health_retries": 20,
+      "health_interval_seconds": 2
+    },
+    "service": {
+      "name": "simple-site.service"
+    },
+    "nginx": {
+      "www_redirect": false,
+      "tls_hostnames": [
+        "simple.localhost"
+      ]
+    },
+    "source_server_conf": "/srv/apps/simple-site/server.conf"
+  }
+]

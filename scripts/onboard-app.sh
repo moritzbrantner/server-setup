@@ -5,6 +5,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   sudo ./scripts/onboard-app.sh --repo-url <git-url> --dest <folder> --email <admin@example.com> [options]
+  ./scripts/onboard-app.sh --repo-url <git-url> --dest <folder> [--branch main] --dry-run
 
 Description:
   End-to-end onboarding for one app repository:
@@ -22,6 +23,7 @@ Options:
   --config PATH          Sites config path (default: deploy/sites.json)
   --skip-tls             Skip TLS acquisition/update step
   --branch NAME          Force branch checkout before validation/deploy
+  --dry-run              Validate onboarding and deploy preflight without changing live state
   -h, --help             Show help
 
 Idempotency:
@@ -51,6 +53,7 @@ EMAIL=""
 CONFIG_PATH="deploy/sites.json"
 SKIP_TLS=0
 FORCE_BRANCH=""
+DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,6 +80,10 @@ while [[ $# -gt 0 ]]; do
     --branch)
       FORCE_BRANCH="${2:-}"
       shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
       ;;
     -h|--help)
       usage
@@ -106,11 +113,15 @@ if [[ -n "$EMAIL" && ! "$EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then
   exit 1
 fi
 
-require_root
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  require_root
+fi
 require_cmd git
 require_cmd jq
-require_cmd systemctl
-require_cmd nginx
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  require_cmd systemctl
+  require_cmd nginx
+fi
 
 repo_checkout() {
   local repo_url="$1"
@@ -223,6 +234,11 @@ run_tls_step() {
   local domain="$1"
   local include_www="$2"
 
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[6/7] TLS step skipped by --dry-run"
+    return
+  fi
+
   if [[ "$SKIP_TLS" -eq 1 ]]; then
     echo "[6/7] TLS step skipped by --skip-tls"
     return
@@ -266,21 +282,37 @@ check_dns_status() {
   echo "resolved"
 }
 
-# 1) Clone/update
-repo_checkout "$REPO_URL" "$DEST"
+WORK_DEST="$DEST"
+TEMP_CHECKOUT=""
+TEMP_CONFIG=""
+
+cleanup() {
+  rm -rf "$TEMP_CHECKOUT"
+  rm -f "$TEMP_CONFIG"
+}
+trap cleanup EXIT
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  TEMP_CHECKOUT="$(mktemp -d)"
+  WORK_DEST="$TEMP_CHECKOUT/repo"
+  echo "[1/7] Cloning repository into temporary dry-run checkout"
+  git clone "$REPO_URL" "$WORK_DEST"
+else
+  repo_checkout "$REPO_URL" "$DEST"
+fi
 
 # Optional branch override prior to validation.
 if [[ -n "$FORCE_BRANCH" ]]; then
-  checkout_branch "$DEST" "$FORCE_BRANCH"
+  checkout_branch "$WORK_DEST" "$FORCE_BRANCH"
 fi
 
 # 2) Verify server.conf structure and discover normalized entry.
-CONF_PATH="$DEST/server.conf"
+CONF_PATH="$WORK_DEST/server.conf"
 read_server_conf "$CONF_PATH"
 
 echo "[3/7] Validating server.conf via discover-sites"
 DISCOVER_TMP=$(mktemp)
-./scripts/discover-sites.sh --base-glob "$DEST" --output "$DISCOVER_TMP"
+./scripts/discover-sites.sh --base-glob "$WORK_DEST" --output "$DISCOVER_TMP"
 SITE_COUNT=$(jq 'length' "$DISCOVER_TMP")
 if [[ "$SITE_COUNT" -ne 1 ]]; then
   echo "Expected exactly one site in discovered output, got $SITE_COUNT" >&2
@@ -306,16 +338,23 @@ fi
 if [[ -z "$FORCE_BRANCH" ]]; then
   CONF_BRANCH=$(jq -r '.branch // empty' "$CONF_PATH")
   if [[ -n "$CONF_BRANCH" ]]; then
-    checkout_branch "$DEST" "$CONF_BRANCH"
+    checkout_branch "$WORK_DEST" "$CONF_BRANCH"
   fi
 fi
 
-# 3) Register/update site entry idempotently.
-register_site_entry "$SITE_ENTRY" "$CONFIG_PATH"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  TEMP_CONFIG="$(mktemp)"
+  printf '[%s]\n' "$SITE_ENTRY" >"$TEMP_CONFIG"
+  echo "[4/7] Running deploy preflight"
+  ./scripts/sync-github-sites.sh --config "$TEMP_CONFIG" --site "$SITE_NAME" --preflight-only
+else
+  # 3) Register/update site entry idempotently.
+  register_site_entry "$SITE_ENTRY" "$CONFIG_PATH"
 
-# 4) Deploy this site (generates runtime + nginx config).
-echo "[5/7] Deploying '$SITE_NAME'"
-./scripts/sync-github-sites.sh --config "$CONFIG_PATH" --site "$SITE_NAME"
+  # 4) Deploy this site (generates runtime + nginx config).
+  echo "[5/7] Deploying '$SITE_NAME'"
+  ./scripts/sync-github-sites.sh --config "$CONFIG_PATH" --site "$SITE_NAME"
+fi
 
 # 5) Acquire/update TLS certs.
 INCLUDE_WWW=0
@@ -335,7 +374,9 @@ if [[ -L "$CURRENT_SYMLINK" || -e "$CURRENT_SYMLINK" ]]; then
 fi
 
 SERVICE_STATUS="n/a (static mode)"
-if [[ "$RUNTIME_MODE" == "service" ]]; then
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  SERVICE_STATUS="n/a (dry-run)"
+elif [[ "$RUNTIME_MODE" == "service" ]]; then
   UNIT_NAME="app-${SITE_NAME}.service"
   SERVICE_STATUS=$(systemctl is-active "$UNIT_NAME" 2>/dev/null || true)
   if [[ -z "$SERVICE_STATUS" ]]; then
@@ -349,7 +390,9 @@ if command -v curl >/dev/null 2>&1; then
 fi
 DNS_STATUS=$(check_dns_status "$SITE_DOMAIN" "$PUBLIC_IP")
 MANUAL_ACTION="none"
-if [[ "$SKIP_TLS" -eq 1 ]]; then
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  MANUAL_ACTION="Dry-run only; no deploy or TLS changes were applied"
+elif [[ "$SKIP_TLS" -eq 1 ]]; then
   MANUAL_ACTION="TLS step skipped; run scripts/setup-letsencrypt.sh when DNS is ready"
 elif [[ "$DNS_STATUS" == "not-resolved" || "$DNS_STATUS" == "mismatch" ]]; then
   MANUAL_ACTION="DNS may not be fully propagated for $SITE_DOMAIN; verify A/AAAA records and re-run onboarding"

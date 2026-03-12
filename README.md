@@ -2,6 +2,8 @@
 
 Scripts for managing a Hetzner Ubuntu LTS server running multiple websites/services.
 
+Additional guide: [`INSTALLING-AND-TESTING.md`](INSTALLING-AND-TESTING.md)
+
 ## Scripts
 
 ## Quick start / one-command init
@@ -232,6 +234,92 @@ You can also execute checks directly:
 
 ```bash
 ./scripts/run-self-checks.sh
+```
+
+Docker sandbox:
+
+```bash
+docker build -t server-setup-sandbox .
+docker run --privileged --cgroupns=host \
+  --name server-setup-sandbox \
+  -p 8080:80 -p 8443:443 \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  -d server-setup-sandbox
+docker exec -it server-setup-sandbox bash
+```
+
+Inside the container, the repository is available at `/opt/server-setup`. This path auto-seeds three runnable example repos into `/srv/apps` on startup:
+- `/srv/apps/simple-site`
+- `/srv/apps/rest-api`
+- `/srv/apps/complex-site`
+
+Raw `docker run` is useful for host-style script experimentation. For the full example stack, prefer Docker Compose because it also starts the attached Postgres database.
+
+Docker Compose sandbox with Postgres:
+
+```bash
+docker compose up -d --build
+docker compose exec server-setup bash
+```
+
+Published ports:
+- SSH: `localhost:8022` -> container `22`
+- HTTP: `localhost:8080` -> container `80`
+- HTTPS: `localhost:8443` -> container `443`
+- Postgres: `localhost:55432` -> container `5432`
+
+Why `55432`:
+- Host port `5432` is commonly already used by a local Postgres instance.
+- The sandbox still uses the normal in-network Postgres port `5432` at hostname `test-db`.
+
+Inside the sandbox container, the attached database is reachable at `test-db:5432` with:
+- database: `server_setup`
+- user: `server_setup`
+- password: `server_setup`
+- URL: `postgres://server_setup:server_setup@test-db:5432/server_setup`
+
+Compose defaults for the examples:
+- `SKIP_UNLIGHTHOUSE=1` so local HTTP-only example deploys are fast and do not require extra audit tooling.
+- `SKIP_EXAMPLE_SEED=0` so the three sandbox repos are created automatically under `/srv/apps`.
+
+End-to-end example tryout:
+
+```bash
+docker compose up -d --build
+docker compose exec server-setup bash
+cd /opt/server-setup
+ls -1 /srv/apps
+./scripts/discover-sites.sh --base-glob '/srv/apps/*' --output deploy/sites.json
+./scripts/sync-github-sites.sh --config deploy/sites.json
+curl -H 'Host: simple.localhost' http://127.0.0.1/
+curl -H 'Host: api.localhost' http://127.0.0.1/healthz
+curl -H 'Host: app.localhost' http://127.0.0.1/
+curl -H 'Host: api.localhost' http://127.0.0.1/api/items
+curl -H 'Host: api.localhost' \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Created from the compose sandbox"}' \
+  http://127.0.0.1/api/items
+psql "$TEST_DATABASE_URL" -c 'select count(*) from demo_items;'
+```
+
+Host-side smoke checks:
+
+```bash
+curl -H 'Host: simple.localhost' http://127.0.0.1:8080/
+curl -H 'Host: api.localhost' http://127.0.0.1:8080/healthz
+curl -H 'Host: app.localhost' http://127.0.0.1:8080/
+```
+
+Reseeding example repos:
+
+```bash
+./scripts/seed-example-repositories.sh --target-dir /srv/apps --force
+```
+
+Stop the sandbox:
+
+```bash
+docker compose down
 ```
 
 

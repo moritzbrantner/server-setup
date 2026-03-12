@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>About Simple Site</title>
+    <link rel="stylesheet" href="/assets/site.css">
+  </head>
+  <body>
+    <main class="page prose">
+      <p class="eyebrow">About This Example</p>
+      <h1>What This Repo Is For</h1>
+      <p>
+        This repository exists so you can validate static site discovery and
+        deployment without any runtime dependencies.
+      </p>
+      <ol>
+        <li>The seeding script turns this folder into a standalone git repo under <code>/srv/apps/simple-site</code>.</li>
+        <li><code>discover-sites.sh</code> normalizes its <code>server.conf</code>.</li>
+        <li><code>sync-github-sites.sh</code> clones it into a release directory and publishes it through Nginx.</li>
+      </ol>
+      <p><a href="/">Back to the home page</a></p>
+    </main>
+  </body>
+</html>

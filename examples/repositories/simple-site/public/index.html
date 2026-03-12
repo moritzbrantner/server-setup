@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Simple Site</title>
+    <link rel="stylesheet" href="/assets/site.css">
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">server-setup example</p>
+        <h1>Simple Site</h1>
+        <p class="lede">
+          A static site example that proves discovery, release deployment, and
+          Nginx routing in the compose sandbox.
+        </p>
+        <div class="actions">
+          <a href="/about.html">Read the walkthrough</a>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>No build step</h2>
+          <p>Everything is served directly from <code>public/</code>.</p>
+        </article>
+        <article class="card">
+          <h2>Static deploy</h2>
+          <p>The generated Nginx config uses <code>root</code> and <code>try_files</code>.</p>
+        </article>
+        <article class="card">
+          <h2>Easy smoke test</h2>
+          <p>Use the sandbox port with a Host header to verify routing.</p>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>
