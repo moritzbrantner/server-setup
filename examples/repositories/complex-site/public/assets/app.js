@@ -1,6 +1,6 @@
 (function () {
   const config = window.APP_CONFIG || {};
-  const apiBaseUrl = config.apiBaseUrl || "http://api.localhost:8080";
+  const apiBaseUrl = config.apiBaseUrl || "http://127.0.0.1:4001";
 
   const apiBase = document.getElementById("api-base");
   const itemCount = document.getElementById("item-count");

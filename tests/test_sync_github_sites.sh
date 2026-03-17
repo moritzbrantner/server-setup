@@ -197,8 +197,106 @@ JSON
   rm -rf "$tmp"
 }
 
+test_service_unit_adds_bun_path_and_runtime_command() {
+  local tmp
+  tmp="$(make_temp_dir)"
+  make_stub_commands "$tmp/bin"
+  create_repo "$tmp/repos/service-app" service
+
+  cat >"$tmp/sites.json" <<JSON
+[
+  {
+    "name": "service-app",
+    "repo": "$tmp/repos/service-app",
+    "branch": "main",
+    "domain": "service.test",
+    "workdir": "$tmp/workdir",
+    "releases_dir": "$tmp/workdir/releases",
+    "current_symlink": "$tmp/workdir/current",
+    "runtime": {
+      "mode": "service",
+      "command": "PORT=3000 bun run start",
+      "port": 3000,
+      "health_endpoint": "/health",
+      "health_retries": 1,
+      "health_interval_seconds": 1
+    },
+    "service": { "name": "service-app.service" },
+    "build_output": "dist",
+    "nginx": { "www_redirect": false, "tls_hostnames": [] }
+  }
+]
+JSON
+
+  PATH="$tmp/bin:$PATH" \
+    STATE_DIR="$tmp/state" \
+    LOCK_DIR="$tmp/locks" \
+    LOG_DIR="$tmp/logs" \
+    NGINX_SITE_AVAILABLE_DIR="$tmp/nginx-available" \
+    NGINX_SITE_ENABLED_DIR="$tmp/nginx-enabled" \
+    NGINX_DEFAULT_SITE_LINK="$tmp/nginx-enabled/default" \
+    SYSTEMD_UNIT_DIR="$tmp/systemd" \
+    "$SCRIPT" --config "$tmp/sites.json" >"$tmp/out.log" 2>"$tmp/error.log"
+
+  grep -q 'export BUN_INSTALL=' "$tmp/systemd/app-service-app.service"
+  grep -q 'export PATH=' "$tmp/systemd/app-service-app.service"
+  grep -q 'PORT=3000 bun run start' "$tmp/systemd/app-service-app.service"
+  rm -rf "$tmp"
+}
+
+test_preflight_rejects_absolute_runtime_working_dir() {
+  local tmp
+  tmp="$(make_temp_dir)"
+  make_stub_commands "$tmp/bin"
+  create_repo "$tmp/repos/service-app" service
+
+  cat >"$tmp/sites.json" <<JSON
+[
+  {
+    "name": "service-app",
+    "repo": "$tmp/repos/service-app",
+    "branch": "main",
+    "domain": "service.test",
+    "workdir": "$tmp/workdir",
+    "releases_dir": "$tmp/workdir/releases",
+    "current_symlink": "$tmp/workdir/current",
+    "runtime": {
+      "mode": "service",
+      "command": "PORT=3000 bun run start",
+      "working_dir": "/root/apps/service-app",
+      "port": 3000,
+      "health_endpoint": "/health",
+      "health_retries": 1,
+      "health_interval_seconds": 1
+    },
+    "service": { "name": "service-app.service" },
+    "build_output": "dist",
+    "nginx": { "www_redirect": false, "tls_hostnames": [] }
+  }
+]
+JSON
+
+  if PATH="$tmp/bin:$PATH" \
+    STATE_DIR="$tmp/state" \
+    LOCK_DIR="$tmp/locks" \
+    LOG_DIR="$tmp/logs" \
+    NGINX_SITE_AVAILABLE_DIR="$tmp/nginx-available" \
+    NGINX_SITE_ENABLED_DIR="$tmp/nginx-enabled" \
+    NGINX_DEFAULT_SITE_LINK="$tmp/nginx-enabled/default" \
+    SYSTEMD_UNIT_DIR="$tmp/systemd" \
+    "$SCRIPT" --config "$tmp/sites.json" --preflight-only >"$tmp/out.log" 2>"$tmp/error.log"; then
+    echo "Expected preflight to fail for absolute runtime.working_dir" >&2
+    exit 1
+  fi
+
+  grep -q "runtime.working_dir must be relative to the deployed release" "$tmp/error.log"
+  rm -rf "$tmp"
+}
+
 run_test "sync dry-run rejects unresolved env placeholders" test_dry_run_fails_on_missing_env_placeholder
 run_test "sync keeps previous release when health check fails" test_failed_health_check_keeps_previous_release_active
 run_test "sync restores last good nginx config when validation fails" test_invalid_nginx_config_restores_last_good_config
+run_test "sync service unit exports bun path for runtime commands" test_service_unit_adds_bun_path_and_runtime_command
+run_test "sync preflight rejects absolute runtime working_dir" test_preflight_rejects_absolute_runtime_working_dir
 
 echo "All tests passed: $pass_count"

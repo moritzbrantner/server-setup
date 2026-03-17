@@ -1,3 +1,5 @@
 .git
 .gitignore
 deploy/sites.json
+monitor/webapp/.next
+monitor/webapp/node_modules

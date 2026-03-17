@@ -3,6 +3,8 @@ set -euo pipefail
 
 # Idempotent server bootstrap for common tooling on Ubuntu LTS.
 
+PKG_MGR='apt'
+
 log() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"
 }

@@ -211,10 +211,28 @@ cd /opt/server-setup
 
 Published host ports:
 
-- `8022` for SSH
-- `8080` for HTTP
-- `8443` for HTTPS
+- `22` for SSH
+- `80` for HTTP
+- `443` for HTTPS
+- `4000` for the status webapp
+- `4001` for the example REST API service
+- `4002` for the example complex web app service
+- `4003` for the example simple static web app
 - `55432` for Postgres
+
+Included applications after `docker compose up -d --build`:
+
+- Monitor: `http://127.0.0.1:4000/`
+- REST API: `http://127.0.0.1:4001/healthz` and `http://127.0.0.1:4001/api/items`
+- Complex site: `http://127.0.0.1:4002/`
+- Simple static site: `http://127.0.0.1:4003/`
+
+Inside the container, nginx also serves:
+
+- `monitor.localhost`
+- `api.localhost`
+- `app.localhost`
+- `simple.localhost`
 
 Database connection details inside the sandbox:
 
@@ -257,9 +275,13 @@ psql "$TEST_DATABASE_URL" -c 'select count(*) from demo_items;'
 Host-side smoke checks:
 
 ```bash
-curl -H 'Host: simple.localhost' http://127.0.0.1:8080/
-curl -H 'Host: api.localhost' http://127.0.0.1:8080/healthz
-curl -H 'Host: app.localhost' http://127.0.0.1:8080/
+curl http://127.0.0.1:4000/
+curl http://127.0.0.1:4003/
+curl -H 'Host: simple.localhost' http://127.0.0.1/
+curl -H 'Host: api.localhost' http://127.0.0.1/healthz
+curl -H 'Host: app.localhost' http://127.0.0.1/
+curl http://127.0.0.1:4001/healthz
+curl http://127.0.0.1:4002/
 ```
 
 Reseed the example repos if you want to restore them to template state:

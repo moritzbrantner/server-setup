@@ -5,7 +5,12 @@ import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-ALLOWED_ORIGINS = {"http://app.localhost:8080"}
+ALLOWED_ORIGINS = {
+    "http://app.localhost",
+    "http://app.localhost:4002",
+    "http://localhost:4002",
+    "http://127.0.0.1:4002",
+}
 
 
 def build_database_url():
@@ -166,7 +171,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    port = int(os.environ.get("PORT", "4000"))
+    port = int(os.environ.get("PORT", "4001"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"rest-api listening on {port}", flush=True)
     server.serve_forever()

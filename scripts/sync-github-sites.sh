@@ -356,12 +356,20 @@ run_unlighthouse() {
   log_event "$site_name" "unlighthouse" "success" "site=${site_url}"
 }
 
+quote_for_bash_literal() {
+  local value="$1"
+  printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\\\\''/g")"
+}
+
 render_systemd_unit() {
   local name="$1"
   local command="$2"
   local working_dir="$3"
   local run_user="$4"
   local env_file="$5"
+  local shell_payload
+
+  shell_payload=$(quote_for_bash_literal "set -euo pipefail; export BUN_INSTALL=\"\${BUN_INSTALL:-\$HOME/.bun}\"; export PATH=\"\$BUN_INSTALL/bin:\$PATH\"; ${command}")
 
   cat <<UNIT
 [Unit]
@@ -371,7 +379,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=${working_dir}
-ExecStart=/usr/bin/env bash -lc '${command}'
+ExecStart=/usr/bin/env bash -lc ${shell_payload}
 Restart=always
 RestartSec=3
 User=${run_user}
@@ -661,6 +669,7 @@ preflight_site() {
   local releases_dir="$5"
   local current_symlink="$6"
   local runtime_port="$7"
+  local runtime_working_dir="$8"
 
   if ! path_is_writable_or_creatable "$workdir"; then
     echo "Preflight failed for '$site_name': workdir is not writable/creatable: $workdir" >&2
@@ -679,6 +688,14 @@ preflight_site() {
     return 1
   fi
   if [[ "$runtime_mode" == "service" ]]; then
+    if [[ -z "$runtime_working_dir" ]]; then
+      echo "Preflight failed for '$site_name': runtime.working_dir cannot be empty" >&2
+      return 1
+    fi
+    if [[ "$runtime_working_dir" == /* ]]; then
+      echo "Preflight failed for '$site_name': runtime.working_dir must be relative to the deployed release, got '$runtime_working_dir'" >&2
+      return 1
+    fi
     if ! path_is_writable_or_creatable "${SYSTEMD_UNIT_DIR}/app-${site_name}.service"; then
       echo "Preflight failed for '$site_name': systemd unit directory is not writable" >&2
       return 1
@@ -904,7 +921,7 @@ deploy_site() {
     return 0
   fi
 
-  preflight_site "$name" "$runtime_mode" "$runtime_command" "$workdir" "$releases_dir" "$current_symlink" "$runtime_port"
+  preflight_site "$name" "$runtime_mode" "$runtime_command" "$workdir" "$releases_dir" "$current_symlink" "$runtime_port" "$runtime_working_dir" || return 1
   if [[ "$DRY_RUN" -eq 1 || "$PREFLIGHT_ONLY" -eq 1 ]]; then
     log_event "$name" "deploy" "dry-run" "preflight completed"
     return 0
@@ -1004,6 +1021,7 @@ main() {
   local site_json
   local site_name
   local index
+  local site_status
 
   init_runtime_dirs
   load_config
@@ -1030,12 +1048,14 @@ main() {
     if [[ -z "$site_name" ]]; then
       continue
     fi
-    process_site_with_lock "$site_name" deploy_site "$site_json" || {
+    process_site_with_lock "$site_name" deploy_site "$site_json"
+    site_status=$?
+    if [[ "$site_status" -ne 0 ]]; then
       state_mark_failure "$site_name" "deployment failed"
       restore_last_good_files "$site_name"
       log_event "$site_name" "deploy" "failed" "deployment failed" "error"
       exit 1
-    }
+    fi
   done
 
   echo "Done syncing configured GitHub sites."

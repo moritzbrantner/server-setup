@@ -1,0 +1,16 @@
+[Unit]
+Description=Server Setup status webapp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=SERVER_SETUP_ROOT=/opt/server-setup
+Environment=STATUS_WEBAPP_HOST=0.0.0.0
+Environment=STATUS_WEBAPP_PORT=4000
+ExecStart=/usr/bin/env bash /opt/server-setup/scripts/start-status-webapp.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

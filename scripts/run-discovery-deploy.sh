@@ -4,7 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-APPS_GLOB="${APPS_GLOB:-/srv/apps/*}"
+default_apps_glob() {
+  if [[ -d "/root/apps" ]]; then
+    printf '/root/apps/*'
+  else
+    printf '/srv/apps/*'
+  fi
+}
+
+APPS_GLOB="${APPS_GLOB:-$(default_apps_glob)}"
 CONFIG_PATH="${CONFIG_PATH:-$ROOT_DIR/deploy/sites.json}"
 LOCK_FILE="${LOCK_FILE:-/var/lock/site-discovery-deploy.lock}"
 LOG_DIR="${LOG_DIR:-/var/log/server-setup}"

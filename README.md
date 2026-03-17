@@ -4,6 +4,30 @@ Scripts for managing a Hetzner Ubuntu LTS server running multiple websites/servi
 
 Additional guide: [`INSTALLING-AND-TESTING.md`](INSTALLING-AND-TESTING.md)
 
+## Status webapp
+
+A small Next.js dashboard is available under [`monitor/webapp`](monitor/webapp) for a live view of:
+- host load, disk, memory, and core services (`nginx`, `docker`)
+- deployed applications from `deploy/sites.json`
+- per-app HTTP reachability, deploy-state JSON, and systemd service status
+
+Run it locally from the repo root:
+
+```bash
+cd monitor/webapp
+npm install
+npm run dev
+```
+
+By default the app reads:
+- `deploy/sites.json` when present, otherwise `monitor/websites.json`
+- deploy state from `/var/lib/server-setup/state`
+
+Optional environment overrides:
+- `SERVER_SETUP_ROOT=/path/to/server-setup`
+- `STATUS_CONFIG_PATH=deploy/sites.json`
+- `STATUS_STATE_DIR=/var/lib/server-setup/state`
+
 ## Scripts
 
 ## Quick start / one-command init
@@ -176,11 +200,11 @@ Every discovered repository must include `server.conf` at the repo root with thi
   },
   "runtime": {
     "mode": "service",
-    "command": "npm run start",
+    "command": "PORT=4003 npm run start",
     "working_dir": ".",
     "user": "www-data",
     "env_file": "/etc/default/marketing-site",
-    "port": 3000,
+    "port": 4003,
     "health_endpoint": "/healthz"
   },
   "service": {
@@ -281,10 +305,26 @@ docker compose exec server-setup bash
 ```
 
 Published ports:
-- SSH: `localhost:8022` -> container `22`
-- HTTP: `localhost:8080` -> container `80`
-- HTTPS: `localhost:8443` -> container `443`
+- SSH: `localhost:22` -> container `22`
+- HTTP: `localhost:80` -> container `80`
+- HTTPS: `localhost:443` -> container `443`
+- Status webapp: `localhost:4000` -> container `4000`
+- Example REST API passthrough: `localhost:4001` -> container `4001`
+- Example complex app passthrough: `localhost:4002` -> container `4002`
+- Example simple-site passthrough: `localhost:4003` -> container `4003`
 - Postgres: `localhost:55432` -> container `5432`
+
+Included applications after `docker compose up -d --build`:
+- Monitor: open `http://127.0.0.1:4000/`
+- REST API: open `http://127.0.0.1:4001/healthz` or POST to `http://127.0.0.1:4001/api/items`
+- Complex site: open `http://127.0.0.1:4002/`
+- Simple static site: open `http://127.0.0.1:4003/`
+
+Inside the container, nginx also serves host-based routes:
+- `monitor.localhost` -> monitor webapp
+- `api.localhost` -> REST API
+- `app.localhost` -> complex site
+- `simple.localhost` -> simple static site
 
 Why `55432`:
 - Host port `5432` is commonly already used by a local Postgres instance.
@@ -323,9 +363,13 @@ psql "$TEST_DATABASE_URL" -c 'select count(*) from demo_items;'
 Host-side smoke checks:
 
 ```bash
-curl -H 'Host: simple.localhost' http://127.0.0.1:8080/
-curl -H 'Host: api.localhost' http://127.0.0.1:8080/healthz
-curl -H 'Host: app.localhost' http://127.0.0.1:8080/
+curl http://127.0.0.1:4000/
+curl http://127.0.0.1:4003/
+curl -H 'Host: simple.localhost' http://127.0.0.1/
+curl -H 'Host: api.localhost' http://127.0.0.1/healthz
+curl -H 'Host: app.localhost' http://127.0.0.1/
+curl http://127.0.0.1:4001/healthz
+curl http://127.0.0.1:4002/
 ```
 
 Reseeding example repos:

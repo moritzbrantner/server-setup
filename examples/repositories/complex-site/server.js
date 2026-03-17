@@ -2,8 +2,8 @@ const express = require("express");
 const path = require("path");
 
 const app = express();
-const port = Number(process.env.PORT || 3000);
-const apiBaseUrl = process.env.API_BASE_URL || "http://api.localhost:8080";
+const port = Number(process.env.PORT || 4002);
+const apiBaseUrl = process.env.API_BASE_URL || "http://127.0.0.1:4001";
 
 app.use("/assets", express.static(path.join(__dirname, "public", "assets")));
 

@@ -129,6 +129,7 @@ def normalize_server_conf(conf_path: Path) -> dict:
     if runtime_mode == "service":
         command = runtime.get("command")
         port = runtime.get("port")
+        working_dir = runtime.get("working_dir", ".")
         if not isinstance(command, str) or not command.strip():
             raise ValidationError(
                 f"Validation error in {conf_path}: missing required key 'runtime.command' for service mode"
@@ -136,6 +137,14 @@ def normalize_server_conf(conf_path: Path) -> dict:
         if not isinstance(port, int):
             raise ValidationError(
                 f"Validation error in {conf_path}: runtime.port must be numeric"
+            )
+        if not isinstance(working_dir, str) or not working_dir.strip():
+            raise ValidationError(
+                f"Validation error in {conf_path}: runtime.working_dir must be a non-empty string when provided"
+            )
+        if os.path.isabs(working_dir):
+            raise ValidationError(
+                f"Validation error in {conf_path}: runtime.working_dir must be relative to the deployed release"
             )
 
     workdir = conf.get("workdir")
@@ -232,6 +241,9 @@ def discover_sites(base_glob: str) -> list[dict]:
         seen_names[name] = conf_path
         seen_domains[domain] = conf_path
         normalized.append(entry)
+
+    if not normalized:
+        raise ValidationError(f"No valid server.conf files found under base glob: {base_glob}")
 
     return normalized
 

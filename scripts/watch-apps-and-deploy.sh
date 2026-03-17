@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APPS_DIR="${APPS_DIR:-/srv/apps}"
+default_apps_dir() {
+  if [[ -d "/root/apps" ]]; then
+    printf '/root/apps'
+  else
+    printf '/srv/apps'
+  fi
+}
+
+APPS_DIR="${APPS_DIR:-$(default_apps_dir)}"
 DEBOUNCE_SECONDS="${DEBOUNCE_SECONDS:-5}"
 RUNNER_SERVICE="${RUNNER_SERVICE:-site-discovery-deploy.service}"
 LOG_DIR="${LOG_DIR:-/var/log/server-setup}"

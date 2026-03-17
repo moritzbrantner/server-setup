@@ -192,10 +192,58 @@ JSON
   rm -rf "$tmp"
 }
 
+test_discover_rejects_absolute_runtime_working_dir() {
+  local tmp
+  tmp="$(make_temp_dir)"
+  mkdir -p "$tmp/apps/bad-working-dir"
+
+  cat > "$tmp/apps/bad-working-dir/server.conf" <<'JSON'
+{
+  "name": "bad-working-dir",
+  "repo": "git@github.com:example/bad-working-dir.git",
+  "branch": "main",
+  "domain": "bad-working-dir.test",
+  "build_output": "dist",
+  "deploy_hooks": {},
+  "runtime": {
+    "mode": "service",
+    "command": "bun run start",
+    "working_dir": "/root/apps/bad-working-dir",
+    "port": 3000
+  },
+  "service": { "name": "bad-working-dir.service" }
+}
+JSON
+
+  if "$SCRIPT" --base-glob "$tmp/apps/*" --output "$tmp/sites.json" 2>"$tmp/error.log"; then
+    echo "Expected absolute runtime.working_dir validation to fail" >&2
+    exit 1
+  fi
+
+  grep -q "runtime.working_dir must be relative to the deployed release" "$tmp/error.log"
+  rm -rf "$tmp"
+}
+
+test_discover_fails_when_no_server_conf_files_are_found() {
+  local tmp
+  tmp="$(make_temp_dir)"
+  mkdir -p "$tmp/apps/no-config"
+
+  if "$SCRIPT" --base-glob "$tmp/apps/*" --output "$tmp/sites.json" 2>"$tmp/error.log"; then
+    echo "Expected discovery to fail when no server.conf files are found" >&2
+    exit 1
+  fi
+
+  grep -q "No valid server.conf files found under base glob" "$tmp/error.log"
+  rm -rf "$tmp"
+}
+
 run_test "discover auto-detects repo/branch from local clone" test_discover_from_local_clone_with_autodetect_repo_branch
 run_test "discover falls back to absolute repo path when origin is missing" test_discover_falls_back_to_absolute_path_without_origin
 run_test "discover normalizes nginx settings" test_discover_normalizes_nginx_settings
 run_test "discover rejects duplicate domains" test_discover_rejects_duplicate_domains
 run_test "discover rejects invalid runtime port" test_discover_rejects_invalid_runtime_port
+run_test "discover rejects absolute runtime working_dir" test_discover_rejects_absolute_runtime_working_dir
+run_test "discover fails when no server.conf files are found" test_discover_fails_when_no_server_conf_files_are_found
 
 echo "All tests passed: $pass_count"

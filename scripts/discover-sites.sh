@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  ./scripts/discover-sites.sh [--base-glob '/srv/apps/*'] [--output deploy/sites.json] [--dry-run]
+  ./scripts/discover-sites.sh [--base-glob '/root/apps/*'] [--output deploy/sites.json] [--dry-run]
 
 Description:
   Scans each directory that matches --base-glob for a server.conf JSON file,
@@ -20,7 +20,16 @@ require_cmd() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-BASE_GLOB="/srv/apps/*"
+
+default_base_glob() {
+  if [[ -d "/root/apps" ]]; then
+    printf '/root/apps/*'
+  else
+    printf '/srv/apps/*'
+  fi
+}
+
+BASE_GLOB="$(default_base_glob)"
 OUTPUT_PATH="deploy/sites.json"
 DRY_RUN=0
 
