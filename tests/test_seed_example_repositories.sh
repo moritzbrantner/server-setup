@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=lib/test-helpers.sh
 source "$SCRIPT_DIR/lib/test-helpers.sh"
 
 SEED_SCRIPT="$ROOT_DIR/scripts/seed-example-repositories.sh"

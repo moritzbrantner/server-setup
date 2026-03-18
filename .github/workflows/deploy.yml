@@ -35,6 +35,7 @@ jobs:
           bash -n scripts/setup-letsencrypt.sh
           bash -n scripts/sync-github-sites.sh
           bash -n scripts/watch-apps-and-deploy.sh
+          bash -n tests/test_docker_sandbox.sh
           bash -n tests/test_discover_sites.sh
           bash -n tests/test_sync_github_sites.sh
           bash -n tests/run-tests.sh
@@ -54,6 +55,7 @@ jobs:
             scripts/setup-letsencrypt.sh \
             scripts/sync-github-sites.sh \
             scripts/watch-apps-and-deploy.sh \
+            tests/test_docker_sandbox.sh \
             tests/test_discover_sites.sh \
             tests/test_sync_github_sites.sh \
             tests/run-tests.sh \
@@ -83,10 +85,13 @@ jobs:
       - name: Integration tests
         run: ./tests/run-tests.sh
 
-      - name: Docker smoke test
+      - name: Docker integration test
+        env:
+          IMAGE_NAME: server-setup-test
+          TLM_DEUTSCHLAND_GITHUB_TOKEN: ${{ secrets.TLM_DEUTSCHLAND_GITHUB_TOKEN }}
         run: |
           docker build -t server-setup-test .
-          docker run --rm server-setup-test
+          ./tests/test_docker_sandbox.sh
 
   deploy:
     name: Deploy to server

@@ -2,8 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=lib/test-helpers.sh
 source "$SCRIPT_DIR/lib/test-helpers.sh"
 
+# shellcheck source=../scripts/install-nginx-site.sh
 source "$ROOT_DIR/scripts/install-nginx-site.sh"
 
 test_render_static_site_config() {

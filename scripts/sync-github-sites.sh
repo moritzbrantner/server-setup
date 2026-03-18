@@ -28,7 +28,6 @@ require_cmd() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 CONFIG_PATH="deploy/sites.json"
 DISCOVER_BASE=""
@@ -751,7 +750,9 @@ restore_last_good_files() {
     mkdir -p "$NGINX_SITE_AVAILABLE_DIR" "$NGINX_SITE_ENABLED_DIR"
     cp "$nginx_backup" "$site_conf"
     ln -sfn "$site_conf" "$site_link"
-    nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx || true
+    fi
   fi
 
   if [[ -f "$unit_backup" ]]; then

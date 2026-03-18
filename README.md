@@ -414,6 +414,11 @@ set -a; source .env; set +a
 
 Use `${ENV_VAR}` placeholders in `deploy/sites.json` for secret values. The sync script resolves placeholders at runtime and fails with a clear error if a referenced variable is missing or empty.
 
+Secret values you must set when using the tracked configs in this repo:
+- `TLM_DEUTSCHLAND_GITHUB_TOKEN`: required by [deploy/sites.json](/home/moenarch/moritzbrantner/server-setup/deploy/sites.json) to clone `tlm-deutschland` over HTTPS.
+- `UNLIGHTHOUSE_SERVER_TOKEN`: optional client token used by `deploy/sites.json` when uploading reports to an Unlighthouse server.
+- `UNLIGHTHOUSE_AUTH_TOKEN`: optional server-side token for [docker-compose.additional-services.yml](/home/moenarch/moritzbrantner/server-setup/docker-compose.additional-services.yml); if you use the bundled Unlighthouse server, set it to the same value as `UNLIGHTHOUSE_SERVER_TOKEN`.
+
 Release settings:
 - `releases_dir` (optional): where timestamped releases are created. Defaults to `<workdir>/releases`.
 - `current_symlink` (optional): symlink switched to the latest successful release. Defaults to `<workdir>/current`.

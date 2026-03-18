@@ -1,7 +1,9 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    container=docker
+    container=docker \
+    BUN_INSTALL=/root/.bun \
+    PATH=/root/.bun/bin:$PATH
 
 WORKDIR /opt/server-setup
 
@@ -25,10 +27,12 @@ RUN apt-get update \
     procps \
     python3 \
     python3-certbot-nginx \
+    shellcheck \
     sudo \
     systemd \
     systemd-sysv \
     ufw \
+    unzip \
     vim-tiny \
  && mkdir -p /etc/apt/keyrings \
  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
@@ -39,6 +43,7 @@ RUN apt-get update \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
     nodejs \
+ && curl -fsSL https://bun.sh/install | bash \
  && rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/server-setup
