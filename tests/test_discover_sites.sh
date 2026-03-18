@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/test-helpers.sh
 source "$SCRIPT_DIR/lib/test-helpers.sh"
 
+# Initialized by test-helpers.sh; repeated here so ShellCheck sees it.
+declare -i pass_count="${pass_count:-0}"
+
 SCRIPT="$ROOT_DIR/scripts/discover-sites.sh"
 
 test_discover_from_local_clone_with_autodetect_repo_branch() {

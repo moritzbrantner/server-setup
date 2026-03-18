@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/test-helpers.sh
 source "$SCRIPT_DIR/lib/test-helpers.sh"
 
+# Initialized by test-helpers.sh; repeated here so ShellCheck sees it.
+declare -i pass_count="${pass_count:-0}"
+
 IMAGE_NAME="${IMAGE_NAME:-server-setup-test}"
 CONTAINER_NAME="server-setup-test-$$"
 
@@ -25,14 +28,16 @@ dump_diagnostics() {
   ' >&2 || true
 }
 
-trap '
-  status=$?
+on_exit() {
+  local status=$?
   if [[ $status -ne 0 ]]; then
     dump_diagnostics
   fi
   cleanup
   exit $status
-' EXIT
+}
+
+trap on_exit EXIT
 
 wait_for_container_command() {
   local cmd="$1"
