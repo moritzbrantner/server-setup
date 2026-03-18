@@ -49,6 +49,12 @@ sudo ./scripts/init-server.sh \
   --skip-docker
 ```
 
+To configure just the monitoring dashboard as a persistent service on port `4000`:
+
+```bash
+sudo ./scripts/setup-status-webapp.sh
+```
+
 ## Install An App Repository
 
 Each app repository must contain a valid `server.conf` at the repository root. The easiest way to install and register one app is:

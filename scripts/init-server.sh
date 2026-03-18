@@ -18,8 +18,9 @@ Description:
   Canonical one-command server bootstrap that runs:
     1) scripts/ensure-server-tools.sh
     2) scripts/harden-server.sh (unless --skip-hardening)
-    3) scripts/install-nginx-site.sh
-    4) scripts/setup-letsencrypt.sh (unless --skip-certbot)
+    3) scripts/setup-status-webapp.sh
+    4) scripts/install-nginx-site.sh
+    5) scripts/setup-letsencrypt.sh (unless --skip-certbot)
 
 Options:
   --domain            Required. Primary domain (example.com).
@@ -140,6 +141,7 @@ ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 status_tools="not-run"
 status_docker="not-run"
 status_hardening="not-run"
+status_monitor="not-run"
 status_nginx="not-run"
 status_dns="not-run"
 status_certbot="not-run"
@@ -164,6 +166,7 @@ Step status:
 - ensure-server-tools: $status_tools
 - docker check/install: $status_docker
 - harden-server:       $status_hardening
+- status-webapp:       $status_monitor
 - install-nginx-site:  $status_nginx
 - dns preflight:       $status_dns
 - setup-letsencrypt:   $status_certbot
@@ -293,7 +296,7 @@ setup_automation_units() {
 require_root
 cd "$ROOT_DIR"
 
-log "[1/5] Ensuring baseline server tools are present"
+log "[1/6] Ensuring baseline server tools are present"
 tools_args=()
 if [[ "$SKIP_DOCKER" -eq 1 ]]; then
   tools_args+=(--skip-docker)
@@ -309,14 +312,18 @@ fi
 
 if [[ "$SKIP_HARDENING" -eq 1 ]]; then
   status_hardening="skipped"
-  log "[2/5] Hardening step skipped by --skip-hardening"
+  log "[2/6] Hardening step skipped by --skip-hardening"
 else
-  log "[2/5] Applying server hardening defaults"
+  log "[2/6] Applying server hardening defaults"
   "$SCRIPT_DIR/harden-server.sh"
   status_hardening="ok"
 fi
 
-log "[3/5] Installing/updating Nginx site configuration"
+log "[3/6] Installing/updating status webapp service"
+"$SCRIPT_DIR/setup-status-webapp.sh" --root "$ROOT_DIR"
+status_monitor="ok"
+
+log "[4/6] Installing/updating Nginx site configuration"
 nginx_args=(--domain "$DOMAIN" --email "$EMAIL")
 if [[ -n "$WEB_ROOT" ]]; then
   nginx_args+=(--root "$WEB_ROOT")
@@ -332,7 +339,7 @@ status_nginx="ok"
 if [[ "$SKIP_CERTBOT" -eq 1 ]]; then
   status_dns="skipped"
   status_certbot="skipped"
-  log "[4/5] Certbot step skipped by --skip-certbot"
+  log "[5/6] Certbot step skipped by --skip-certbot"
   if [[ "$AUTO_ENABLE_AUTOMATION" -eq 1 ]]; then
     log "[extra] Installing and enabling automation services"
     setup_automation_units
@@ -342,10 +349,10 @@ if [[ "$SKIP_CERTBOT" -eq 1 ]]; then
   exit 0
 fi
 
-log "[4/5] Checking DNS readiness before certbot"
+log "[5/6] Checking DNS readiness before certbot"
 dns_preflight_or_die
 
-log "[5/5] Provisioning TLS certificate with certbot"
+log "[6/6] Provisioning TLS certificate with certbot"
 certbot_args=(--domain "$DOMAIN" --email "$EMAIL")
 if [[ "$INCLUDE_WWW" -eq 1 ]]; then
   certbot_args+=(--www)

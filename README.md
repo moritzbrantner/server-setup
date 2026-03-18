@@ -28,6 +28,15 @@ Optional environment overrides:
 - `STATUS_CONFIG_PATH=deploy/sites.json`
 - `STATUS_STATE_DIR=/var/lib/server-setup/state`
 
+Install it as a persistent systemd service on a server:
+
+```bash
+sudo ./scripts/setup-status-webapp.sh
+```
+
+That script installs Node.js if needed, builds the app, and enables
+`server-setup-status-webapp.service` so the monitor stays up on port `4000`.
+
 ## Scripts
 
 ## Quick start / one-command init

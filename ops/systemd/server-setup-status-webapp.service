@@ -5,9 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/default/server-setup-status-webapp
 Environment=SERVER_SETUP_ROOT=/opt/server-setup
 Environment=STATUS_WEBAPP_HOST=0.0.0.0
 Environment=STATUS_WEBAPP_PORT=4000
+WorkingDirectory=/opt/server-setup/monitor/webapp
 ExecStart=/usr/bin/env bash /opt/server-setup/scripts/start-status-webapp.sh
 Restart=always
 RestartSec=2
