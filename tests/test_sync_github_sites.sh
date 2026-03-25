@@ -38,7 +38,12 @@ fi
 printf 'ok'
 SH
 
-  chmod +x "$bin_dir/systemctl" "$bin_dir/nginx" "$bin_dir/curl"
+  cat >"$bin_dir/bun" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+
+  chmod +x "$bin_dir/systemctl" "$bin_dir/nginx" "$bin_dir/curl" "$bin_dir/bun"
 }
 
 create_repo() {
