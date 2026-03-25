@@ -338,14 +338,14 @@ run_unlighthouse() {
     return
   fi
 
-  require_cmd npx
+  require_cmd bunx
 
   local ts report_dir
   ts=$(date +%Y%m%d-%H%M%S)
   report_dir="/var/log/unlighthouse/${site_name}/${ts}"
   mkdir -p "$report_dir"
 
-  local cmd=(npx --yes unlighthouse-ci@latest --site "$site_url" --output-path "$report_dir")
+  local cmd=(bunx --yes unlighthouse-ci@latest --site "$site_url" --output-path "$report_dir")
   if [[ -n "$unlighthouse_server_url" && "$unlighthouse_server_url" != "null" ]]; then
     cmd+=(--server "$unlighthouse_server_url" --build-name "$site_name")
     if [[ -n "$unlighthouse_server_token" && "$unlighthouse_server_token" != "null" ]]; then
