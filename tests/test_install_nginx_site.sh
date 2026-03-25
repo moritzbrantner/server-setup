@@ -5,12 +5,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/test-helpers.sh
 source "$SCRIPT_DIR/lib/test-helpers.sh"
 
+# Initialized by test-helpers.sh; repeated here so ShellCheck sees it.
+declare -i pass_count="${pass_count:-0}"
+
 test_render_static_site_config() {
   local conf
   conf="$(python3 "$ROOT_DIR/scripts/install_nginx_site.py" --domain example.test --root /var/www/example.test/public --render-config)"
 
   grep -Fq "root /var/www/example.test/public;" <<<"$conf"
-  grep -Fq 'try_files $uri $uri/ =404;' <<<"$conf"
+  grep -Fq "try_files \$uri \$uri/ =404;" <<<"$conf"
 }
 
 test_render_proxy_site_config() {
@@ -18,9 +21,9 @@ test_render_proxy_site_config() {
   conf="$(python3 "$ROOT_DIR/scripts/install_nginx_site.py" --domain example.test --port 3000 --www-redirect --render-config)"
 
   grep -Fq "proxy_pass http://127.0.0.1:3000;" <<<"$conf"
-  grep -Fq 'proxy_set_header X-Forwarded-Host $host;' <<<"$conf"
-  grep -Fq 'proxy_set_header X-Forwarded-Port $server_port;' <<<"$conf"
-  grep -Fq 'proxy_set_header Upgrade $http_upgrade;' <<<"$conf"
+  grep -Fq "proxy_set_header X-Forwarded-Host \$host;" <<<"$conf"
+  grep -Fq "proxy_set_header X-Forwarded-Port \$server_port;" <<<"$conf"
+  grep -Fq "proxy_set_header Upgrade \$http_upgrade;" <<<"$conf"
   grep -Fq 'proxy_set_header Connection "upgrade";' <<<"$conf"
   grep -Fq 'proxy_read_timeout 60s;' <<<"$conf"
   grep -Fq 'proxy_send_timeout 60s;' <<<"$conf"
@@ -47,7 +50,7 @@ test_render_proxy_site_config_with_tls() {
   grep -Fq 'listen 443 ssl;' <<<"$conf"
   grep -Fq 'server_name example.test;' <<<"$conf"
   grep -Fq 'server_name www.example.test;' <<<"$conf"
-  grep -Fq 'return 301 https://example.test$request_uri;' <<<"$conf"
+  grep -Fq "return 301 https://example.test\$request_uri;" <<<"$conf"
   grep -Fq "ssl_certificate $tmp/live/example.test/fullchain.pem;" <<<"$conf"
   grep -Fq "ssl_certificate_key $tmp/live/example.test/privkey.pem;" <<<"$conf"
   rm -rf "$tmp"

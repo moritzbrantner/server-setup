@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/test-helpers.sh
 source "$SCRIPT_DIR/lib/test-helpers.sh"
 
+# Initialized by test-helpers.sh; repeated here so ShellCheck sees it.
+declare -i pass_count="${pass_count:-0}"
+
 test_render_status_webapp_env_uses_port_4000() {
   local env_body
   env_body="$(python3 "$ROOT_DIR/scripts/setup_status_webapp.py" --root "$ROOT_DIR" --render-env)"
