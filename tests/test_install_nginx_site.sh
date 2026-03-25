@@ -5,12 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/test-helpers.sh
 source "$SCRIPT_DIR/lib/test-helpers.sh"
 
-# shellcheck source=../scripts/install-nginx-site.sh
-source "$ROOT_DIR/scripts/install-nginx-site.sh"
-
 test_render_static_site_config() {
   local conf
-  conf="$(render_nginx_site_config "example.test" "/var/www/example.test/public" "" 0)"
+  conf="$(python3 "$ROOT_DIR/scripts/install_nginx_site.py" --domain example.test --root /var/www/example.test/public --render-config)"
 
   grep -Fq "root /var/www/example.test/public;" <<<"$conf"
   grep -Fq 'try_files $uri $uri/ =404;' <<<"$conf"
@@ -18,7 +15,7 @@ test_render_static_site_config() {
 
 test_render_proxy_site_config() {
   local conf
-  conf="$(render_nginx_site_config "example.test" "" "3000" 1)"
+  conf="$(python3 "$ROOT_DIR/scripts/install_nginx_site.py" --domain example.test --port 3000 --www-redirect --render-config)"
 
   grep -Fq "proxy_pass http://127.0.0.1:3000;" <<<"$conf"
   grep -Fq 'proxy_set_header X-Forwarded-Host $host;' <<<"$conf"
@@ -40,10 +37,12 @@ test_render_proxy_site_config_with_tls() {
   printf 'options\n' >"$tmp/options-ssl-nginx.conf"
   printf 'dhparams\n' >"$tmp/ssl-dhparams.pem"
 
-  LETSENCRYPT_LIVE_DIR="$tmp/live" \
-    LETSENCRYPT_OPTIONS_PATH="$tmp/options-ssl-nginx.conf" \
-    LETSENCRYPT_DHPARAM_PATH="$tmp/ssl-dhparams.pem" \
-    conf="$(render_nginx_site_config "example.test" "" "3000" 1)"
+  conf="$(
+    LETSENCRYPT_LIVE_DIR="$tmp/live" \
+      LETSENCRYPT_OPTIONS_PATH="$tmp/options-ssl-nginx.conf" \
+      LETSENCRYPT_DHPARAM_PATH="$tmp/ssl-dhparams.pem" \
+      python3 "$ROOT_DIR/scripts/install_nginx_site.py" --domain example.test --port 3000 --www-redirect --render-config
+  )"
 
   grep -Fq 'listen 443 ssl;' <<<"$conf"
   grep -Fq 'server_name example.test;' <<<"$conf"
