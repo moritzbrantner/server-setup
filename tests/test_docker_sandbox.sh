@@ -70,6 +70,11 @@ verify_tlm_repo_access() {
 }
 
 test_docker_sandbox_deploys_tlm_deutschland() {
+  if [[ -z "${TLM_DEUTSCHLAND_GITHUB_TOKEN:-}" ]]; then
+    echo "Skipping tlm-deutschland Docker deploy test because TLM_DEUTSCHLAND_GITHUB_TOKEN is not set."
+    return 0
+  fi
+
   docker run -d \
     --privileged \
     --cgroupns=host \
