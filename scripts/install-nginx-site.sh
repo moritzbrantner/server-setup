@@ -40,6 +40,9 @@ ROOT=""
 PORT=""
 WWW_REDIRECT=0
 EMAIL=""
+LETSENCRYPT_LIVE_DIR="${LETSENCRYPT_LIVE_DIR:-/etc/letsencrypt/live}"
+LETSENCRYPT_OPTIONS_PATH="${LETSENCRYPT_OPTIONS_PATH:-/etc/letsencrypt/options-ssl-nginx.conf}"
+LETSENCRYPT_DHPARAM_PATH="${LETSENCRYPT_DHPARAM_PATH:-/etc/letsencrypt/ssl-dhparams.pem}"
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -114,6 +117,14 @@ render_nginx_site_config() {
   local www_redirect="$4"
   local location_block=""
   local redirect_block=""
+  local cert_dir="${LETSENCRYPT_LIVE_DIR}/${domain}"
+  local cert_fullchain="${cert_dir}/fullchain.pem"
+  local cert_privkey="${cert_dir}/privkey.pem"
+  local has_tls=0
+
+  if [[ -f "$cert_fullchain" && -f "$cert_privkey" && -f "$LETSENCRYPT_OPTIONS_PATH" && -f "$LETSENCRYPT_DHPARAM_PATH" ]]; then
+    has_tls=1
+  fi
 
   if [[ -n "$port" ]]; then
     location_block=$(cat <<NGINX
@@ -123,9 +134,13 @@ render_nginx_site_config() {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port \$server_port;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_pass http://127.0.0.1:${port};
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
     }
 NGINX
 )
@@ -149,10 +164,59 @@ server {
     listen [::]:80;
     server_name www.${domain};
 
-    return 301 http://${domain}\$request_uri;
+    return 301 https://${domain}\$request_uri;
 }
 NGINX
 )
+
+    if [[ "$has_tls" -eq 1 ]]; then
+      redirect_block+=$(cat <<NGINX
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name www.${domain};
+
+    ssl_certificate ${cert_fullchain};
+    ssl_certificate_key ${cert_privkey};
+    include ${LETSENCRYPT_OPTIONS_PATH};
+    ssl_dhparam ${LETSENCRYPT_DHPARAM_PATH};
+
+    return 301 https://${domain}\$request_uri;
+}
+NGINX
+)
+    fi
+  fi
+
+  if [[ "$has_tls" -eq 1 ]]; then
+    cat <<NGINX
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+
+    return 301 https://${domain}\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ${domain};
+
+    ssl_certificate ${cert_fullchain};
+    ssl_certificate_key ${cert_privkey};
+    include ${LETSENCRYPT_OPTIONS_PATH};
+    ssl_dhparam ${LETSENCRYPT_DHPARAM_PATH};
+
+${location_block}
+
+    access_log /var/log/nginx/${domain}.access.log;
+    error_log  /var/log/nginx/${domain}.error.log;
+}
+${redirect_block}
+NGINX
+    return
   fi
 
   cat <<NGINX

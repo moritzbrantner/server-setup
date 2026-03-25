@@ -45,6 +45,9 @@ NGINX_SITE_AVAILABLE_DIR="${NGINX_SITE_AVAILABLE_DIR:-/etc/nginx/sites-available
 NGINX_SITE_ENABLED_DIR="${NGINX_SITE_ENABLED_DIR:-/etc/nginx/sites-enabled}"
 NGINX_DEFAULT_SITE_LINK="${NGINX_DEFAULT_SITE_LINK:-/etc/nginx/sites-enabled/default}"
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
+LETSENCRYPT_LIVE_DIR="${LETSENCRYPT_LIVE_DIR:-/etc/letsencrypt/live}"
+LETSENCRYPT_OPTIONS_PATH="${LETSENCRYPT_OPTIONS_PATH:-/etc/letsencrypt/options-ssl-nginx.conf}"
+LETSENCRYPT_DHPARAM_PATH="${LETSENCRYPT_DHPARAM_PATH:-/etc/letsencrypt/ssl-dhparams.pem}"
 LOG_FILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -449,6 +452,36 @@ render_nginx_site_config() {
     server_names="$tls_hostnames_csv"
   fi
 
+  if [[ "$www_redirect" == "true" ]]; then
+    server_names="$(awk -v domain="$domain" '
+      {
+        for (i = 1; i <= NF; i++) {
+          if ($i != "" && $i != ("www." domain)) {
+            names[++count] = $i
+          }
+        }
+      }
+      END {
+        if (count == 0) {
+          print domain
+          exit
+        }
+        for (i = 1; i <= count; i++) {
+          printf "%s%s", names[i], (i < count ? " " : "")
+        }
+        printf "\n"
+      }
+    ' <<<"$server_names")"
+  fi
+
+  local cert_dir="${LETSENCRYPT_LIVE_DIR}/${domain}"
+  local cert_fullchain="${cert_dir}/fullchain.pem"
+  local cert_privkey="${cert_dir}/privkey.pem"
+  local has_tls=0
+  if [[ -f "$cert_fullchain" && -f "$cert_privkey" && -f "$LETSENCRYPT_OPTIONS_PATH" && -f "$LETSENCRYPT_DHPARAM_PATH" ]]; then
+    has_tls=1
+  fi
+
   local redirect_block=""
   if [[ "$www_redirect" == "true" ]]; then
     local www_domain="www.${domain}"
@@ -458,21 +491,47 @@ server {
     listen 80;
     listen [::]:80;
     server_name ${www_domain};
-    return 301 http://${domain}\$request_uri;
+    return 301 https://${domain}\$request_uri;
 }
 BLOCK
 )
+
+    if [[ "$has_tls" -eq 1 ]]; then
+      redirect_block+=$(cat <<BLOCK
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ${www_domain};
+
+    ssl_certificate ${cert_fullchain};
+    ssl_certificate_key ${cert_privkey};
+    include ${LETSENCRYPT_OPTIONS_PATH};
+    ssl_dhparam ${LETSENCRYPT_DHPARAM_PATH};
+
+    return 301 https://${domain}\$request_uri;
+}
+BLOCK
+)
+    fi
   fi
 
   local location_block
   if [[ "$runtime_mode" == "service" ]]; then
     location_block=$(cat <<BLOCK
     location / {
+        proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port \$server_port;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_pass http://127.0.0.1:${runtime_port};
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
     }
 BLOCK
 )
@@ -486,6 +545,36 @@ BLOCK
     }
 BLOCK
 )
+  fi
+
+  if [[ "$has_tls" -eq 1 ]]; then
+    cat <<CONF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${server_names};
+
+    return 301 https://${domain}\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ${server_names};
+
+    ssl_certificate ${cert_fullchain};
+    ssl_certificate_key ${cert_privkey};
+    include ${LETSENCRYPT_OPTIONS_PATH};
+    ssl_dhparam ${LETSENCRYPT_DHPARAM_PATH};
+
+${location_block}
+
+    access_log /var/log/nginx/${site_name}.access.log;
+    error_log  /var/log/nginx/${site_name}.error.log;
+}
+${redirect_block}
+CONF
+    return
   fi
 
   cat <<CONF

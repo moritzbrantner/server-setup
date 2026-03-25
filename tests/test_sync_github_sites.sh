@@ -248,6 +248,69 @@ JSON
   rm -rf "$tmp"
 }
 
+test_service_nginx_config_uses_https_when_letsencrypt_files_exist() {
+  local tmp
+  tmp="$(make_temp_dir)"
+  make_stub_commands "$tmp/bin"
+  create_repo "$tmp/repos/service-app" service
+  mkdir -p "$tmp/letsencrypt/live/service.test"
+  printf 'fullchain\n' >"$tmp/letsencrypt/live/service.test/fullchain.pem"
+  printf 'privkey\n' >"$tmp/letsencrypt/live/service.test/privkey.pem"
+  printf 'options\n' >"$tmp/letsencrypt/options-ssl-nginx.conf"
+  printf 'dhparams\n' >"$tmp/letsencrypt/ssl-dhparams.pem"
+
+  cat >"$tmp/sites.json" <<JSON
+[
+  {
+    "name": "service-app",
+    "repo": "$tmp/repos/service-app",
+    "branch": "main",
+    "domain": "service.test",
+    "workdir": "$tmp/workdir",
+    "releases_dir": "$tmp/workdir/releases",
+    "current_symlink": "$tmp/workdir/current",
+    "runtime": {
+      "mode": "service",
+      "command": "bash ./run.sh",
+      "port": 3000,
+      "health_endpoint": "/health",
+      "health_retries": 1,
+      "health_interval_seconds": 1
+    },
+    "service": { "name": "service-app.service" },
+    "build_output": "dist",
+    "nginx": {
+      "www_redirect": true,
+      "tls_hostnames": ["service.test", "www.service.test"]
+    }
+  }
+]
+JSON
+
+  PATH="$tmp/bin:$PATH" \
+    STATE_DIR="$tmp/state" \
+    LOCK_DIR="$tmp/locks" \
+    LOG_DIR="$tmp/logs" \
+    NGINX_SITE_AVAILABLE_DIR="$tmp/nginx-available" \
+    NGINX_SITE_ENABLED_DIR="$tmp/nginx-enabled" \
+    NGINX_DEFAULT_SITE_LINK="$tmp/nginx-enabled/default" \
+    SYSTEMD_UNIT_DIR="$tmp/systemd" \
+    LETSENCRYPT_LIVE_DIR="$tmp/letsencrypt/live" \
+    LETSENCRYPT_OPTIONS_PATH="$tmp/letsencrypt/options-ssl-nginx.conf" \
+    LETSENCRYPT_DHPARAM_PATH="$tmp/letsencrypt/ssl-dhparams.pem" \
+    "$SCRIPT" --config "$tmp/sites.json" >"$tmp/out.log" 2>"$tmp/error.log"
+
+  grep -q 'listen 443 ssl;' "$tmp/nginx-available/service-app.conf"
+  grep -q 'server_name service.test;' "$tmp/nginx-available/service-app.conf"
+  grep -q 'server_name www.service.test;' "$tmp/nginx-available/service-app.conf"
+  grep -q 'return 301 https://service.test$request_uri;' "$tmp/nginx-available/service-app.conf"
+  grep -q 'proxy_set_header X-Forwarded-Host $host;' "$tmp/nginx-available/service-app.conf"
+  grep -q 'proxy_set_header X-Forwarded-Port $server_port;' "$tmp/nginx-available/service-app.conf"
+  grep -q 'proxy_set_header Upgrade $http_upgrade;' "$tmp/nginx-available/service-app.conf"
+  grep -q 'proxy_set_header Connection "upgrade";' "$tmp/nginx-available/service-app.conf"
+  rm -rf "$tmp"
+}
+
 test_preflight_rejects_absolute_runtime_working_dir() {
   local tmp
   tmp="$(make_temp_dir)"
@@ -301,6 +364,7 @@ run_test "sync dry-run rejects unresolved env placeholders" test_dry_run_fails_o
 run_test "sync keeps previous release when health check fails" test_failed_health_check_keeps_previous_release_active
 run_test "sync restores last good nginx config when validation fails" test_invalid_nginx_config_restores_last_good_config
 run_test "sync service unit exports bun path for runtime commands" test_service_unit_adds_bun_path_and_runtime_command
+run_test "sync nginx config renders https blocks when letsencrypt material exists" test_service_nginx_config_uses_https_when_letsencrypt_files_exist
 run_test "sync preflight rejects absolute runtime working_dir" test_preflight_rejects_absolute_runtime_working_dir
 
 echo "All tests passed: $pass_count"
