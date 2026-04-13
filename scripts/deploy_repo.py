@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import tempfile
 from pathlib import Path
 
@@ -33,30 +34,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--webhook-url", default="")
     parser.add_argument("--skip-github-hook", action="store_true")
     return parser.parse_args()
-
-
-def discover_site(root: Path, checkout: Path) -> dict:
-    with tempfile.NamedTemporaryFile("w+", delete=False, encoding="utf-8") as handle:
-        output_path = Path(handle.name)
-    try:
-        run_checked(
-            [
-                "python3",
-                str(root / "scripts/discover_sites.py"),
-                "--base-glob",
-                str(checkout),
-                "--output",
-                str(output_path),
-            ],
-            cwd=root,
-        )
-        sites = json.loads(output_path.read_text(encoding="utf-8"))
-    finally:
-        output_path.unlink(missing_ok=True)
-
-    if len(sites) != 1:
-        raise SystemExit(f"Expected exactly one discovered site in {checkout}, found {len(sites)}.")
-    return sites[0]
 
 
 def update_automation_env(
@@ -98,6 +75,8 @@ def main() -> None:
     setup_automation_units(root, start_webhook=False)
 
     print("[2/4] Cloning and deploying repository")
+    with tempfile.NamedTemporaryFile("w+", delete=False, encoding="utf-8") as handle:
+        summary_path = Path(handle.name)
     onboard_cmd = [
         "python3",
         str(root / "scripts/onboard_app.py"),
@@ -108,12 +87,18 @@ def main() -> None:
         "--config",
         args.config,
         "--skip-tls",
+        "--summary-output",
+        str(summary_path),
     ]
     if args.branch:
         onboard_cmd.extend(["--branch", args.branch])
-    run_checked(onboard_cmd, cwd=root)
-
-    site = discover_site(root, dest)
+    if sys.stdin.isatty():
+        onboard_cmd.append("--interactive")
+    try:
+        run_checked(onboard_cmd, cwd=root)
+        site = json.loads(summary_path.read_text(encoding="utf-8"))
+    finally:
+        summary_path.unlink(missing_ok=True)
     branch = args.branch or str(site.get("branch") or "main")
     service_name = ((site.get("service") or {}).get("name") or f"{site['name']}.service")
 

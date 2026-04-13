@@ -4,11 +4,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 from interactive_cli import ensure_interactive, maybe_sudo, prompt_bool, prompt_text, repo_root, run_command
@@ -36,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-tls", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--interactive", action="store_true")
+    parser.add_argument("--summary-output", default="")
     return parser.parse_args()
 
 
@@ -88,6 +91,162 @@ def checkout_branch(dest: Path, branch: str) -> None:
     run_checked(["git", "-C", str(dest), "reset", "--hard", f"origin/{branch}"])
 
 
+def current_branch(dest: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(dest), "rev-parse", "--abbrev-ref", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return (result.stdout or "").strip()
+
+
+def repo_basename(repo_url: str) -> str:
+    if repo_url.startswith("git@"):
+        return Path(repo_url.rsplit(":", 1)[-1]).name.removesuffix(".git")
+    parsed = urllib.parse.urlparse(repo_url)
+    return Path(parsed.path).name.removesuffix(".git")
+
+
+def default_site_name(repo_url: str, dest: Path) -> str:
+    for candidate in (repo_basename(repo_url), dest.name):
+        cleaned = re.sub(r"[^a-z0-9.-]+", "-", candidate.strip().lower()).strip(".-")
+        if cleaned:
+            return cleaned
+    return "app"
+
+
+def prompt_int(prompt: str, default: int, minimum: int = 0) -> int:
+    while True:
+        raw = prompt_text(prompt, default=str(default), required=True)
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value >= minimum:
+            return value
+
+
+def discover_site_entry(root: Path, work_dest: Path) -> dict:
+    discover_tmp = Path(tempfile.mkstemp()[1])
+    try:
+        run_checked(
+            [
+                "python3",
+                str(root / "scripts/discover_sites.py"),
+                "--base-glob",
+                str(work_dest),
+                "--output",
+                str(discover_tmp),
+            ],
+            cwd=root,
+        )
+        sites = json.loads(discover_tmp.read_text(encoding="utf-8"))
+    finally:
+        discover_tmp.unlink(missing_ok=True)
+    if len(sites) != 1:
+        raise SystemExit(f"Expected exactly one site in discovered output, got {len(sites)}")
+    return sites[0]
+
+
+def build_site_entry_interactively(repo_url: str, work_dest: Path, branch_override: str) -> dict:
+    name = prompt_text("Site name", default=default_site_name(repo_url, work_dest), required=True)
+    domain = prompt_text("Domain", required=True)
+    runtime_mode = "service" if prompt_bool("Run as a long-lived service?", default=False) else "static"
+    build_output_default = "." if runtime_mode == "service" else "public"
+    build_output = prompt_text(
+        "Build output path (relative to repo, use '.' for repo root)",
+        default=build_output_default,
+        required=True,
+    )
+    build_cmd = prompt_text("Build command", default="")
+    site_url = prompt_text("Public site URL", default=f"https://{domain}", required=True)
+    workdir = prompt_text("Deployment workdir", default=f"/srv/github-sites/{name}", required=True)
+    keep_releases = prompt_int("Releases to keep", default=5, minimum=0)
+    www_redirect = prompt_bool(f"Redirect www.{domain} to {domain}?", default=False)
+    branch = branch_override or current_branch(work_dest) or "main"
+
+    site_entry: dict[str, object] = {
+        "name": name,
+        "repo": repo_url,
+        "branch": branch,
+        "domain": domain,
+        "site_url": site_url,
+        "workdir": workdir,
+        "releases_dir": f"{workdir}/releases",
+        "current_symlink": f"{workdir}/current",
+        "keep_releases": keep_releases,
+        "web_root": None,
+        "build_output": build_output,
+        "deploy_script": None,
+        "pre_deploy_cmd": None,
+        "build_cmd": build_cmd or None,
+        "post_deploy_cmd": None,
+        "git_ssh_command": None,
+        "repo_auth": {
+            "github_token": None,
+            "github_username": None,
+        },
+        "unlighthouse_server_url": None,
+        "unlighthouse_server_token": None,
+        "unlighthouse_cmd": None,
+        "managed_via": "onboard",
+        "nginx": {
+            "www_redirect": www_redirect,
+            "tls_hostnames": [domain, f"www.{domain}"] if www_redirect else [domain],
+        },
+    }
+
+    if runtime_mode == "service":
+        runtime_command = prompt_text("Runtime command", required=True)
+        runtime_port = prompt_int("Runtime port", default=3000, minimum=1)
+        runtime_working_dir = prompt_text(
+            "Runtime working dir (relative to release)",
+            default=".",
+            required=True,
+        )
+        runtime_user = prompt_text("Runtime user", default="root", required=True)
+        runtime_env_file = prompt_text("Runtime env file", default="")
+        health_endpoint = prompt_text("Health endpoint", default="/health", required=True)
+        health_retries = prompt_int("Health retries", default=20, minimum=1)
+        health_interval_seconds = prompt_int("Health interval seconds", default=2, minimum=1)
+        service_name = prompt_text("Systemd service name", default=f"{name}.service", required=True)
+        runtime: dict[str, object] = {
+            "mode": "service",
+            "command": runtime_command,
+            "working_dir": runtime_working_dir,
+            "user": runtime_user,
+            "port": runtime_port,
+            "health_endpoint": health_endpoint,
+            "health_retries": health_retries,
+            "health_interval_seconds": health_interval_seconds,
+        }
+        if runtime_env_file:
+            runtime["env_file"] = runtime_env_file
+        site_entry["runtime"] = runtime
+        site_entry["service"] = {"name": service_name}
+    else:
+        site_entry["runtime"] = {
+            "mode": "static",
+            "working_dir": ".",
+            "user": "root",
+            "health_endpoint": "/health",
+            "health_retries": 20,
+            "health_interval_seconds": 2,
+        }
+        site_entry["service"] = {"name": f"{name}.service"}
+
+    return site_entry
+
+
+def maybe_write_summary(summary_output: str, site_entry: dict) -> None:
+    if not summary_output:
+        return
+    summary_path = Path(summary_output)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(site_entry, indent=2) + "\n", encoding="utf-8")
+
+
 def register_site_entry(discovered_json: dict, config_path: Path) -> None:
     site_name = discovered_json["name"]
     site_domain = discovered_json["domain"]
@@ -133,6 +292,7 @@ def main() -> None:
     args = parse_args()
     collect_missing(args)
     root = repo_root()
+    interactive = args.interactive or sys.stdin.isatty()
     work_dest = Path(args.dest)
     temp_checkout: Path | None = None
     temp_config: Path | None = None
@@ -154,18 +314,22 @@ def main() -> None:
             checkout_branch(work_dest, args.branch)
 
         conf_path = work_dest / "server.conf"
-        if not conf_path.is_file():
-            raise SystemExit(f"Missing required file: {conf_path}")
-        json.loads(conf_path.read_text(encoding="utf-8"))
+        use_repo_config = conf_path.is_file()
+        if conf_path.is_file() and interactive:
+            use_repo_config = prompt_bool("Use repository server.conf for deploy config?", default=True)
 
-        print("[3/7] Validating server.conf via discover-sites")
-        discover_tmp = Path(tempfile.mkstemp()[1])
-        run_checked(["python3", str(root / "scripts/discover_sites.py"), "--base-glob", str(work_dest), "--output", str(discover_tmp)], cwd=root)
-        sites = json.loads(discover_tmp.read_text(encoding="utf-8"))
-        discover_tmp.unlink(missing_ok=True)
-        if len(sites) != 1:
-            raise SystemExit(f"Expected exactly one site in discovered output, got {len(sites)}")
-        site_entry = sites[0]
+        if use_repo_config:
+            json.loads(conf_path.read_text(encoding="utf-8"))
+            print("[3/7] Validating server.conf via discover-sites")
+            site_entry = discover_site_entry(root, work_dest)
+        else:
+            if not interactive:
+                raise SystemExit(
+                    f"Missing required file: {conf_path}. Re-run in an interactive terminal to create deploy config in {args.config}."
+                )
+            print("[3/7] Collecting deploy config interactively")
+            site_entry = build_site_entry_interactively(args.repo_url, work_dest, args.branch)
+        maybe_write_summary(args.summary_output, site_entry)
 
         site_name = site_entry["name"]
         site_domain = site_entry["domain"]
@@ -175,7 +339,7 @@ def main() -> None:
         tls_hostnames = (site_entry.get("nginx") or {}).get("tls_hostnames", []) or []
         tls_has_www = f"www.{site_domain}" in tls_hostnames
 
-        if not args.branch:
+        if use_repo_config and not args.branch:
             conf_branch = json.loads(conf_path.read_text(encoding="utf-8")).get("branch", "")
             if conf_branch:
                 checkout_branch(work_dest, conf_branch)
