@@ -622,6 +622,7 @@ def cleanup_old_releases(releases_dir: Path, keep_releases: int, current_target:
 def preflight_site(
     ctx: SyncContext,
     site_name: str,
+    deploy_mode: str,
     service_name: str,
     runtime_mode: str,
     runtime_command: str,
@@ -633,10 +634,15 @@ def preflight_site(
 ) -> None:
     checks = [
         (workdir, f"workdir is not writable/creatable: {workdir}"),
-        (releases_dir, f"releases_dir is not writable/creatable: {releases_dir}"),
-        (current_symlink, f"current_symlink is not writable/creatable: {current_symlink}"),
         (ctx.nginx_site_available_dir / f"{site_name}.conf", "nginx site directory is not writable"),
     ]
+    if deploy_mode != "checkout":
+        checks.extend(
+            [
+                (releases_dir, f"releases_dir is not writable/creatable: {releases_dir}"),
+                (current_symlink, f"current_symlink is not writable/creatable: {current_symlink}"),
+            ]
+        )
     for path, message in checks:
         if not path_is_writable_or_creatable(path):
             raise SyncError(f"Preflight failed for '{site_name}': {message}")
@@ -742,6 +748,7 @@ def resolve_site_fields(site_json: dict) -> dict:
         )
     fields = {
         "name": name,
+        "deploy_mode": resolve_config_value(name, "deploy_mode", site_json.get("deploy_mode", "release")),
         "service_name": resolve_config_value(name, "service.name", runtime_service_name(site_json, name)),
         "repo": resolve_config_value(name, "repo", site_json.get("repo", "")),
         "branch": resolve_config_value(name, "branch", site_json.get("branch", "main")),
@@ -872,12 +879,14 @@ def deploy_site(ctx: SyncContext, site_json: dict) -> None:
     if ctx.only_site and ctx.only_site != name:
         return
 
+    deploy_mode = str(site["deploy_mode"] or "release")
     workdir = Path(str(site["workdir"]))
     releases_dir = Path(str(site["releases_dir"]))
     current_symlink = Path(str(site["current_symlink"]))
     preflight_site(
         ctx,
         name,
+        deploy_mode,
         str(site["service_name"]),
         str(site["runtime_mode"]),
         str(site["runtime_command"]),
@@ -891,40 +900,53 @@ def deploy_site(ctx: SyncContext, site_json: dict) -> None:
         ctx.log_event(name, "deploy", "dry-run", "preflight completed")
         return
 
-    workdir.mkdir(parents=True, exist_ok=True)
-    releases_dir.mkdir(parents=True, exist_ok=True)
-    release_ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    release_dir = releases_dir / release_ts
-    while release_dir.exists():
-        release_dir = releases_dir / f"{release_ts}-{int(time.time() * 1000) % 10000:04d}"
+    deployment_dir = workdir
+    if deploy_mode == "checkout":
+        if not workdir.is_dir():
+            raise SyncError(f"Checkout workdir does not exist for '{name}': {workdir}")
+    else:
+        workdir.mkdir(parents=True, exist_ok=True)
+        releases_dir.mkdir(parents=True, exist_ok=True)
+        release_ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        deployment_dir = releases_dir / release_ts
+        while deployment_dir.exists():
+            deployment_dir = releases_dir / f"{release_ts}-{int(time.time() * 1000) % 10000:04d}"
 
-    state_mark_attempt(ctx, name, release_dir)
-    ctx.log_event(name, "deploy", "running", f"release={release_dir}")
+    state_mark_attempt(ctx, name, deployment_dir)
+    ctx.log_event(name, "deploy", "running", f"release={deployment_dir}")
 
     git_env = shell_env_with_git_ssh(str(site["git_ssh_command"]))
-    run_checked(git_command_with_github_auth(str(site["repo"]), "clone", str(site["repo"]), str(release_dir)), env=git_env)
-    run_checked(git_command_with_github_auth(str(site["repo"]), "fetch", "--prune", "origin"), cwd=release_dir, env=git_env)
-    run_checked(["git", "checkout", str(site["branch"])], cwd=release_dir, env=git_env)
-    run_checked(["git", "reset", "--hard", f"origin/{site['branch']}"], cwd=release_dir, env=git_env)
-    run_optional(ctx, str(site["pre_deploy_cmd"]), "pre-deploy", name, release_dir)
-    run_optional(ctx, str(site["build_cmd"]), "build", name, release_dir)
+    if deploy_mode == "checkout":
+        run_checked(git_command_with_github_auth(str(site["repo"]), "fetch", "--prune", "origin"), cwd=deployment_dir, env=git_env)
+        run_checked(["git", "checkout", str(site["branch"])], cwd=deployment_dir, env=git_env)
+        run_checked(["git", "reset", "--hard", f"origin/{site['branch']}"], cwd=deployment_dir, env=git_env)
+    else:
+        run_checked(
+            git_command_with_github_auth(str(site["repo"]), "clone", str(site["repo"]), str(deployment_dir)),
+            env=git_env,
+        )
+        run_checked(git_command_with_github_auth(str(site["repo"]), "fetch", "--prune", "origin"), cwd=deployment_dir, env=git_env)
+        run_checked(["git", "checkout", str(site["branch"])], cwd=deployment_dir, env=git_env)
+        run_checked(["git", "reset", "--hard", f"origin/{site['branch']}"], cwd=deployment_dir, env=git_env)
+    run_optional(ctx, str(site["pre_deploy_cmd"]), "pre-deploy", name, deployment_dir)
+    run_optional(ctx, str(site["build_cmd"]), "build", name, deployment_dir)
 
     deploy_script = str(site["deploy_script"])
     if deploy_script and deploy_script != "null":
-        deploy_path = release_dir / deploy_script
+        deploy_path = deployment_dir / deploy_script
         if not deploy_path.is_file():
             raise SyncError(f"deploy_script not found: {deploy_script}")
         deploy_path.chmod(0o755)
         ctx.log_event(name, "deploy-script", "running", deploy_script)
-        run_checked([str(deploy_path)], cwd=release_dir)
+        run_checked([str(deploy_path)], cwd=deployment_dir)
         ctx.log_event(name, "deploy-script", "success", deploy_script)
 
     if site["runtime_mode"] == "service":
         runtime_working_dir = str(site["runtime_working_dir"])
         if runtime_working_dir == ".":
-            runtime_working_dir = str(release_dir)
+            runtime_working_dir = str(deployment_dir)
         elif not runtime_working_dir.startswith("/"):
-            runtime_working_dir = str(release_dir / runtime_working_dir)
+            runtime_working_dir = str(deployment_dir / runtime_working_dir)
         ensure_runtime_service(
             ctx,
             name,
@@ -946,7 +968,8 @@ def deploy_site(ctx: SyncContext, site_json: dict) -> None:
                 int(site["health_interval_seconds"]),
             )
         except Exception:
-            shutil.rmtree(release_dir, ignore_errors=True)
+            if deploy_mode != "checkout":
+                shutil.rmtree(deployment_dir, ignore_errors=True)
             raise
 
     static_root_candidate = str(site["build_output"] or "")
@@ -959,25 +982,29 @@ def deploy_site(ctx: SyncContext, site_json: dict) -> None:
             name,
             str(site["domain"]),
             str(site["runtime_mode"]),
-            release_dir,
+            deployment_dir,
             static_root_candidate,
             str(site["runtime_port"]),
             bool(site["nginx_www_redirect"]),
             str(site["nginx_tls_hostnames_csv"]),
         )
     except Exception:
-        shutil.rmtree(release_dir, ignore_errors=True)
+        if deploy_mode != "checkout":
+            shutil.rmtree(deployment_dir, ignore_errors=True)
         raise
 
-    previous_target = capture_current_target(current_symlink)
+    previous_target = ""
     previous_successful = ctx.read_state_json(name).get("last_successful_release", "") or ""
-    atomic_switch_symlink(current_symlink, release_dir)
-    state_mark_success(ctx, name, release_dir)
+    if deploy_mode != "checkout":
+        previous_target = capture_current_target(current_symlink)
+        atomic_switch_symlink(current_symlink, deployment_dir)
+    state_mark_success(ctx, name, deployment_dir)
     body = ctx.read_state_json(name)
-    body["current_symlink"] = str(current_symlink)
+    if deploy_mode != "checkout":
+        body["current_symlink"] = str(current_symlink)
     ctx.write_state_json(name, body)
 
-    run_optional(ctx, str(site["post_deploy_cmd"]), "post-deploy", name, release_dir)
+    run_optional(ctx, str(site["post_deploy_cmd"]), "post-deploy", name, deployment_dir)
     run_unlighthouse(
         ctx,
         name,
@@ -986,8 +1013,9 @@ def deploy_site(ctx: SyncContext, site_json: dict) -> None:
         str(site["unlighthouse_server_url"]),
         str(site["unlighthouse_server_token"]),
     )
-    cleanup_old_releases(releases_dir, int(site["keep_releases"]), str(release_dir), previous_successful or previous_target)
-    ctx.log_event(name, "deploy", "success", f"release={release_dir}")
+    if deploy_mode != "checkout":
+        cleanup_old_releases(releases_dir, int(site["keep_releases"]), str(deployment_dir), previous_successful or previous_target)
+    ctx.log_event(name, "deploy", "success", f"release={deployment_dir}")
 
 
 def emit_status_json(ctx: SyncContext, config: list[dict]) -> None:
@@ -1018,6 +1046,8 @@ def rollback_site(ctx: SyncContext, config: list[dict], site_name: str) -> None:
     current_symlink = ""
     for site in config:
         if site.get("name") == site_name:
+            if str(site.get("deploy_mode") or "release") == "checkout":
+                raise SyncError(f"Rollback is not supported for checkout deploy mode ('{site_name}').")
             current_symlink = site.get("current_symlink", "")
             break
     restore_last_good_files(ctx, site_name, runtime_service_name(site, site_name))

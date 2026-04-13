@@ -161,10 +161,9 @@ def build_site_entry_interactively(repo_url: str, work_dest: Path, branch_overri
     )
     build_cmd = prompt_text("Build command", default="")
     site_url = prompt_text("Public site URL", default=f"https://{domain}", required=True)
-    workdir = prompt_text("Deployment workdir", default=f"/srv/github-sites/{name}", required=True)
-    keep_releases = prompt_int("Releases to keep", default=5, minimum=0)
     www_redirect = prompt_bool(f"Redirect www.{domain} to {domain}?", default=False)
     branch = branch_override or current_branch(work_dest) or "main"
+    checkout_path = str(work_dest.resolve())
 
     site_entry: dict[str, object] = {
         "name": name,
@@ -172,10 +171,8 @@ def build_site_entry_interactively(repo_url: str, work_dest: Path, branch_overri
         "branch": branch,
         "domain": domain,
         "site_url": site_url,
-        "workdir": workdir,
-        "releases_dir": f"{workdir}/releases",
-        "current_symlink": f"{workdir}/current",
-        "keep_releases": keep_releases,
+        "workdir": checkout_path,
+        "deploy_mode": "checkout",
         "web_root": None,
         "build_output": build_output,
         "deploy_script": None,
@@ -334,6 +331,7 @@ def main() -> None:
         site_name = site_entry["name"]
         site_domain = site_entry["domain"]
         runtime_mode = (site_entry.get("runtime") or {}).get("mode", "static")
+        deploy_mode = str(site_entry.get("deploy_mode") or "release")
         current_symlink = site_entry.get("current_symlink", "")
         www_redirect = bool((site_entry.get("nginx") or {}).get("www_redirect", False))
         tls_hostnames = (site_entry.get("nginx") or {}).get("tls_hostnames", []) or []
@@ -359,7 +357,9 @@ def main() -> None:
 
         print("[7/7] Post-run summary")
         active_release = "<missing>"
-        if current_symlink and (Path(current_symlink).exists() or Path(current_symlink).is_symlink()):
+        if deploy_mode == "checkout":
+            active_release = str(work_dest.resolve())
+        elif current_symlink and (Path(current_symlink).exists() or Path(current_symlink).is_symlink()):
             try:
                 active_release = str(Path(current_symlink).resolve())
             except FileNotFoundError:

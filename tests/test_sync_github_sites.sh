@@ -365,11 +365,54 @@ JSON
   rm -rf "$tmp"
 }
 
+test_checkout_deploy_mode_uses_repository_workdir_without_release_dirs() {
+  local tmp
+  tmp="$(make_temp_dir)"
+  make_stub_commands "$tmp/bin"
+  create_repo "$tmp/repos/source-app" static
+  git clone -q --bare "$tmp/repos/source-app" "$tmp/repos/origin.git"
+  git clone -q "$tmp/repos/origin.git" "$tmp/repos/static-app"
+
+  cat >"$tmp/sites.json" <<JSON
+[
+  {
+    "name": "checkout-app",
+    "deploy_mode": "checkout",
+    "repo": "$tmp/repos/origin.git",
+    "branch": "main",
+    "domain": "checkout.test",
+    "workdir": "$tmp/repos/static-app",
+    "build_output": "dist",
+    "runtime": { "mode": "static", "health_retries": 1, "health_interval_seconds": 1 },
+    "service": { "name": "checkout-app.service" },
+    "nginx": { "www_redirect": false, "tls_hostnames": [] }
+  }
+]
+JSON
+
+  PATH="$tmp/bin:$PATH" \
+    STATE_DIR="$tmp/state" \
+    LOCK_DIR="$tmp/locks" \
+    LOG_DIR="$tmp/logs" \
+    NGINX_SITE_AVAILABLE_DIR="$tmp/nginx-available" \
+    NGINX_SITE_ENABLED_DIR="$tmp/nginx-enabled" \
+    NGINX_DEFAULT_SITE_LINK="$tmp/nginx-enabled/default" \
+    SYSTEMD_UNIT_DIR="$tmp/systemd" \
+    "$SCRIPT" --config "$tmp/sites.json" >"$tmp/out.log" 2>"$tmp/error.log"
+
+  grep -q "$tmp/repos/static-app/dist" "$tmp/nginx-available/checkout-app.conf"
+  [[ ! -e "$tmp/repos/static-app/releases" ]]
+  [[ ! -e "$tmp/repos/static-app/current" ]]
+  assert_eq "$tmp/repos/static-app" "$(jq -r '.current_release' "$tmp/state/checkout-app.json")"
+  rm -rf "$tmp"
+}
+
 run_test "sync dry-run rejects unresolved env placeholders" test_dry_run_fails_on_missing_env_placeholder
 run_test "sync keeps previous release when health check fails" test_failed_health_check_keeps_previous_release_active
 run_test "sync restores last good nginx config when validation fails" test_invalid_nginx_config_restores_last_good_config
 run_test "sync service unit exports bun path for runtime commands" test_service_unit_adds_bun_path_and_runtime_command
 run_test "sync nginx config renders https blocks when letsencrypt material exists" test_service_nginx_config_uses_https_when_letsencrypt_files_exist
 run_test "sync preflight rejects absolute runtime working_dir" test_preflight_rejects_absolute_runtime_working_dir
+run_test "sync checkout deploy mode deploys directly from repository workdir" test_checkout_deploy_mode_uses_repository_workdir_without_release_dirs
 
 echo "All tests passed: $pass_count"

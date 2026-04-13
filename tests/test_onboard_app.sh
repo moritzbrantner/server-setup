@@ -115,7 +115,7 @@ test_interactive_dry_run_without_server_conf_builds_single_config_entry() {
   make_stub_commands "$tmp/bin"
   create_repo_without_server_conf "$tmp/repo"
 
-  printf '\nmanual-site\nmanual.test\nn\npublic\n\n\n%s\n5\nn\n' "$tmp/workdir" | \
+  printf '\nmanual-site\nmanual.test\nn\npublic\n\n\nn\n' | \
     PATH="$tmp/bin:$PATH" \
     STATE_DIR="$tmp/state" \
     LOCK_DIR="$tmp/locks" \
@@ -136,6 +136,7 @@ test_interactive_dry_run_without_server_conf_builds_single_config_entry() {
   grep -q '"name": "manual-site"' "$tmp/summary.json"
   grep -q '"managed_via": "onboard"' "$tmp/summary.json"
   grep -q '"repo": "'"$tmp/repo"'"' "$tmp/summary.json"
+  grep -q '"deploy_mode": "checkout"' "$tmp/summary.json"
   rm -rf "$tmp"
 }
 

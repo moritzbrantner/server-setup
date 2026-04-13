@@ -93,6 +93,21 @@ class SyncGithubSitesTests(unittest.TestCase):
             "https://x-access-token:secret-token@github.com/moritzbrantner/tlm-deutschland.git",
         )
 
+    def test_resolve_site_fields_preserves_checkout_deploy_mode(self) -> None:
+        site = self.module.resolve_site_fields(
+            {
+                "name": "checkout-app",
+                "deploy_mode": "checkout",
+                "repo": "https://github.com/example/checkout-app.git",
+                "workdir": "/srv/apps/checkout-app",
+                "build_output": "dist",
+                "runtime": {"mode": "static"},
+            }
+        )
+
+        self.assertEqual(site["deploy_mode"], "checkout")
+        self.assertEqual(site["workdir"], "/srv/apps/checkout-app")
+
 
 if __name__ == "__main__":
     unittest.main()
