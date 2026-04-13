@@ -1,11 +1,12 @@
 # server-setup
 
-This repo now has four user-facing scripts:
+This repo now has five user-facing scripts:
 
 0. Prepare a fresh server once
 1. Deploy a repository from GitHub and wire up redeploy hooks
 2. Put a running service behind a domain and Let's Encrypt
 3. Shut the stack down again
+4. Inspect or manage the generated systemd services
 
 ## 0. Prepare the server
 
@@ -112,6 +113,26 @@ Also delete generated units, nginx configs, state files, and env files:
 
 ```bash
 sudo ./scripts/shutdown-server.sh --purge
+```
+
+## 4. Inspect or manage services
+
+Show all managed units, whether they currently exist, whether they are active, and which app owns them:
+
+```bash
+./scripts/manage-services.sh
+```
+
+Restart one app service:
+
+```bash
+sudo ./scripts/manage-services.sh restart --app your-app
+```
+
+Filter to a specific unit:
+
+```bash
+./scripts/manage-services.sh --service site-apps-watcher.service
 ```
 
 ## Notes
