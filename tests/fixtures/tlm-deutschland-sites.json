@@ -1,7 +1,7 @@
 [
   {
     "name": "tlm-deutschland",
-    "repo": "https://x-access-token:${TLM_DEUTSCHLAND_GITHUB_TOKEN}@github.com/moritzbrantner/tlm-deutschland.git",
+    "repo": "https://github.com/moritzbrantner/tlm-deutschland.git",
     "branch": "main",
     "domain": "tlm-deutschland.de",
     "site_url": "https://tlm-deutschland.de",
@@ -11,6 +11,10 @@
     "keep_releases": 5,
     "build_output": ".",
     "build_cmd": "bun install --frozen-lockfile && bun run build",
+    "repo_auth": {
+      "github_token": "${TLM_DEUTSCHLAND_GITHUB_TOKEN}",
+      "github_username": "x-access-token"
+    },
     "runtime": {
       "mode": "service",
       "command": "PORT=3001 bun run start",

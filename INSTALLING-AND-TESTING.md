@@ -55,6 +55,10 @@ To configure just the monitoring dashboard as a persistent service on port `4000
 sudo ./scripts/setup-status-webapp.sh
 ```
 
+The dashboard reports public-safe setup health summaries for TLS, deploy automation, host hardening,
+and runtime services so you can spot server-side setup problems quickly without exposing raw secrets
+or command output.
+
 ## Install An App Repository
 
 Each app repository must contain a valid `server.conf` at the repository root. The easiest way to install and register one app is:

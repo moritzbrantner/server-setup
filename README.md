@@ -8,8 +8,9 @@ Additional guide: [`INSTALLING-AND-TESTING.md`](INSTALLING-AND-TESTING.md)
 
 A small Next.js dashboard is available under [`monitor/webapp`](monitor/webapp) for a live view of:
 - host load, disk, memory, and core services (`nginx`, `docker`)
+- setup health for TLS, deploy automation, and hardening (`certbot.timer`, webhook/watcher/timer, `ufw`, `fail2ban`, SSH hardening)
 - deployed applications from `deploy/sites.json`
-- per-app HTTP reachability, deploy-state JSON, and systemd service status
+- per-app HTTP reachability, deploy-state JSON, last failure context, and systemd service status
 
 Run it locally from the repo root:
 
@@ -36,6 +37,8 @@ sudo ./scripts/setup-status-webapp.sh
 
 That script installs Node.js if needed, builds the app, and enables
 `server-setup-status-webapp.service` so the monitor stays up on port `4000`.
+The dashboard is intentionally public-safe: it reports summarized setup state without exposing
+secrets, raw firewall dumps, or log tails.
 
 ## Scripts
 
@@ -191,17 +194,47 @@ What it does:
 
 #### Stable `server.conf` format (JSON)
 
-Every discovered repository must include `server.conf` at the repo root with this schema:
+Every discovered repository must include `server.conf` at the repo root. The shortest useful forms are:
+
+```json
+{
+  "name": "simple-site",
+  "domain": "simple.localhost",
+  "build_output": "public"
+}
+```
 
 ```json
 {
   "name": "marketing-site",
-  "repo": "git@github.com:your-org/marketing-site.git",
-  "branch": "main",
   "domain": "example.com",
-  "workdir": "/srv/github-sites/marketing-site",
-  "web_root": "public",
   "build_output": "dist",
+  "build": "npm ci && npm run build",
+  "command": "PORT=4003 npm run start",
+  "port": 4003,
+  "user": "www-data",
+  "env_file": "/etc/default/marketing-site",
+  "health_endpoint": "/healthz",
+  "post_deploy": "sudo systemctl reload nginx",
+  "www_redirect": true,
+  "tls_hostnames": ["example.com", "www.example.com"]
+}
+```
+
+Validation rules:
+- Required keys: `name`, `domain`, and one of `web_root` or `build_output`.
+- `repo` and `branch` are auto-detected from Git when omitted.
+- `runtime.mode` defaults to `static`; if `command` or `port` is present, it defaults to `service`.
+- `service.name` defaults to `<name>.service`.
+- `nginx.tls_hostnames` defaults to `[domain]`.
+- `web_root` or `build_output` must be present (either one is acceptable).
+- `name` and `domain` must be globally unique across all discovered repos.
+- Optional `repo_auth.github_token` lets you keep the clone token separate from `repo`; GitHub HTTPS and `git@github.com:` URLs are both supported.
+- Optional `nginx.www_redirect` must be boolean; optional `nginx.tls_hostnames` must be an array of non-empty hostnames.
+- The expanded nested shape is still supported for advanced cases:
+
+```json
+{
   "deploy_hooks": {
     "pre_deploy": "echo pre",
     "build": "npm ci && npm run build",
@@ -227,13 +260,6 @@ Every discovered repository must include `server.conf` at the repo root with thi
 }
 ```
 
-Validation rules:
-- Required keys: `name`, `domain`, `deploy_hooks`, `runtime`, `service` (`repo` and `branch` are auto-detected from Git when omitted).
-- `web_root` or `build_output` must be present (either one is acceptable).
-- Required nested keys: `runtime.mode`, `service.name`.
-- `name` and `domain` must be globally unique across all discovered repos.
-- Optional `nginx.www_redirect` must be boolean; optional `nginx.tls_hostnames` must be an array of non-empty hostnames.
-
 Runtime modes:
 - `static`: static site mode. No app process is managed; Nginx serves release assets directly.
 - `service`: long-running application mode (Node/Python/etc.) behind Nginx reverse proxy. Requires `runtime.command` and `runtime.port`.
@@ -247,7 +273,7 @@ Nginx rendering behavior:
 - Before reload, deploy runs `nginx -t`; if validation fails, it restores the last-known-good site config and aborts deployment for that site with clear logs.
 
 Service mode deployment behavior:
-- The deployer deterministically renders `/etc/systemd/system/app-<name>.service` from `runtime` fields.
+- The deployer renders the runtime unit at `/etc/systemd/system/<service.name>` and treats `service.name` as the canonical systemd unit name.
 - `systemctl daemon-reload`, `enable`, and `restart` are only run when the unit file content changes.
 - Rollout is rollback-safe: traffic (`current` symlink) is not switched until the app passes its runtime health check (`http://127.0.0.1:<port><health_endpoint>`).
 - If health check fails, the new release is discarded and the previous release remains active.
@@ -423,8 +449,22 @@ set -a; source .env; set +a
 
 Use `${ENV_VAR}` placeholders in `deploy/sites.json` for secret values. The sync script resolves placeholders at runtime and fails with a clear error if a referenced variable is missing or empty.
 
+For private GitHub repos, prefer:
+
+```json
+{
+  "repo": "https://github.com/your-org/your-repo.git",
+  "repo_auth": {
+    "github_token": "${YOUR_REPO_GITHUB_TOKEN}",
+    "github_username": "x-access-token"
+  }
+}
+```
+
+That keeps the secret out of the repo URL in the tracked JSON while still allowing the deployer to clone over HTTPS.
+
 Secret values you must set when using the tracked configs in this repo:
-- `TLM_DEUTSCHLAND_GITHUB_TOKEN`: required by [deploy/sites.json](/home/moenarch/moritzbrantner/server-setup/deploy/sites.json) to clone `tlm-deutschland` over HTTPS.
+- `TLM_DEUTSCHLAND_GITHUB_TOKEN`: required by [deploy/sites.json](/home/moenarch/moritzbrantner/server-setup/deploy/sites.json) under `repo_auth.github_token` to clone `tlm-deutschland` over HTTPS.
 - `UNLIGHTHOUSE_SERVER_TOKEN`: optional client token used by `deploy/sites.json` when uploading reports to an Unlighthouse server.
 - `UNLIGHTHOUSE_AUTH_TOKEN`: optional server-side token for [docker-compose.additional-services.yml](/home/moenarch/moritzbrantner/server-setup/docker-compose.additional-services.yml); if you use the bundled Unlighthouse server, set it to the same value as `UNLIGHTHOUSE_SERVER_TOKEN`.
 
@@ -499,6 +539,7 @@ Create or edit `/etc/default/site-automation` (template: `ops/systemd/site-autom
 - `APPS_DIR` / `APPS_GLOB`
 - `DEBOUNCE_SECONDS`
 - `WEBHOOK_HOST`, `WEBHOOK_PORT`, `WEBHOOK_PATH`, `WEBHOOK_SECRET`
+- `WEBHOOK_ALLOWED_REPOS`, `WEBHOOK_ALLOWED_BRANCHES`
 
 Manual install (if needed):
 
@@ -511,6 +552,38 @@ sudo systemctl enable --now site-apps-watcher.service
 sudo systemctl enable --now site-webhook-receiver.service
 sudo systemctl enable --now site-discovery-deploy.timer
 ```
+
+#### GitHub webhook setup for push-triggered deploys
+
+1. Put each app into `deploy/sites.json` using either the normalized fields or the short form above (`build`, `command`, `port`, `www_redirect`, and optional `repo_auth.github_token`).
+2. On the server, set the matching token and webhook secret in `/etc/default/site-automation`, for example:
+
+```bash
+TLM_DEUTSCHLAND_GITHUB_TOKEN=github_pat_xxx
+WEBHOOK_SECRET=replace-with-a-random-secret
+WEBHOOK_ALLOWED_REPOS=moritzbrantner/tlm-deutschland
+WEBHOOK_ALLOWED_BRANCHES=main
+```
+
+3. Reload the webhook service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart site-webhook-receiver.service
+sudo systemctl restart site-discovery-deploy.timer
+```
+
+4. In GitHub, open the repository settings for `tlm-deutschland` or any later repo:
+   - `Settings` -> `Webhooks` -> `Add webhook`
+   - `Payload URL`: `http://YOUR_SERVER_IP:9001/github/push`
+   - `Content type`: `application/json`
+   - `Secret`: same value as `WEBHOOK_SECRET`
+   - `Which events?`: `Just the push event`
+   - Save and use `Recent Deliveries` to confirm GitHub gets `202 Accepted`
+
+5. Open the firewall / reverse proxy path if needed so GitHub can reach port `9001`, or proxy `/github/push` from Nginx to the receiver.
+
+When a push hits the configured branch, `site-webhook-receiver.service` starts `site-discovery-deploy.service`, which pulls the latest commit, runs `build_cmd`, rewrites the systemd unit if needed, restarts the app, health-checks it, and only then switches traffic.
 
 #### Trigger deploy from GitHub Actions on push to `main`
 

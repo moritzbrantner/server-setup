@@ -247,9 +247,9 @@ JSON
     SYSTEMD_UNIT_DIR="$tmp/systemd" \
     "$SCRIPT" --config "$tmp/sites.json" >"$tmp/out.log" 2>"$tmp/error.log"
 
-  grep -q 'export BUN_INSTALL=' "$tmp/systemd/app-service-app.service"
-  grep -q 'export PATH=' "$tmp/systemd/app-service-app.service"
-  grep -q 'PORT=3000 bun run start' "$tmp/systemd/app-service-app.service"
+  grep -q 'export BUN_INSTALL=' "$tmp/systemd/service-app.service"
+  grep -q 'export PATH=' "$tmp/systemd/service-app.service"
+  grep -q 'PORT=3000 bun run start' "$tmp/systemd/service-app.service"
   rm -rf "$tmp"
 }
 

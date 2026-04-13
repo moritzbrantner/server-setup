@@ -22,8 +22,8 @@ dump_diagnostics() {
   docker logs "$CONTAINER_NAME" >&2 || true
   docker exec "$CONTAINER_NAME" bash -lc '
     systemctl status nginx --no-pager || true
-    systemctl status app-tlm-deutschland.service --no-pager || true
-    journalctl -u app-tlm-deutschland.service --no-pager -n 200 || true
+    systemctl status tlm-deutschland.service --no-pager || true
+    journalctl -u tlm-deutschland.service --no-pager -n 200 || true
     find /var/log/server-setup -maxdepth 1 -type f -name "*.log" -print -exec tail -n 200 {} \; || true
   ' >&2 || true
 }
@@ -96,7 +96,7 @@ test_docker_sandbox_deploys_tlm_deutschland() {
 
   docker exec "$CONTAINER_NAME" bash -lc 'test -L /root/apps/tlm-deutschland/current'
   docker exec "$CONTAINER_NAME" bash -lc 'test -f /root/apps/tlm-deutschland/current/.next/BUILD_ID'
-  docker exec "$CONTAINER_NAME" bash -lc 'systemctl is-active --quiet app-tlm-deutschland.service'
+  docker exec "$CONTAINER_NAME" bash -lc 'systemctl is-active --quiet tlm-deutschland.service'
   docker exec "$CONTAINER_NAME" bash -lc "curl -fsS -H 'Host: tlm-deutschland.de' http://127.0.0.1/ >/dev/null"
 }
 

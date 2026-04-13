@@ -201,7 +201,8 @@ def main() -> None:
         if args.dry_run:
             service_status = "n/a (dry-run)"
         elif runtime_mode == "service":
-            result = subprocess.run(["systemctl", "is-active", f"app-{site_name}.service"], text=True, capture_output=True, check=False)
+            service_name = (site_entry.get("service") or {}).get("name") or f"{site_name}.service"
+            result = subprocess.run(["systemctl", "is-active", service_name], text=True, capture_output=True, check=False)
             service_status = result.stdout.strip() or "unknown"
         else:
             service_status = "n/a (static mode)"

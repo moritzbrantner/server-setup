@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+MISSING = object()
+
 
 class ValidationError(ValueError):
     """Raised when a config cannot be normalized safely."""
@@ -54,6 +56,41 @@ def require_non_empty_string(value: object, key: str, conf_path: Path) -> str:
     return value.strip()
 
 
+def coalesce_config_value(*values: object) -> object:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                return value.strip()
+            continue
+        if value is MISSING:
+            continue
+        return value
+    return None
+
+
+def runtime_mode_from_config(conf: dict, runtime: dict) -> str | None:
+    explicit_mode = coalesce_config_value(
+        runtime.get("mode"),
+        runtime.get("type"),
+        conf.get("runtime_mode"),
+        conf.get("mode"),
+    )
+    if isinstance(explicit_mode, str):
+        return explicit_mode
+
+    service_hint = coalesce_config_value(
+        runtime.get("command"),
+        conf.get("command"),
+        runtime.get("port"),
+        conf.get("port"),
+    )
+    if service_hint is not None:
+        return "service"
+    return "static"
+
+
 def normalize_server_conf(conf_path: Path) -> dict:
     try:
         conf = json.loads(conf_path.read_text(encoding="utf-8"))
@@ -95,30 +132,43 @@ def normalize_server_conf(conf_path: Path) -> dict:
             f"Validation error in {conf_path}: one of 'web_root' or 'build_output' must be set"
         )
 
-    deploy_hooks = require_object(conf, "deploy_hooks", conf_path)
-    runtime = require_object(conf, "runtime", conf_path)
-    service = require_object(conf, "service", conf_path)
+    deploy_hooks = optional_object(conf, "deploy_hooks", conf_path)
+    runtime = optional_object(conf, "runtime", conf_path)
+    service = optional_object(conf, "service", conf_path)
     nginx = optional_object(conf, "nginx", conf_path)
     deploy = optional_object(conf, "deploy", conf_path)
+    repo_auth = optional_object(conf, "repo_auth", conf_path)
 
-    runtime_mode = runtime.get("mode") or runtime.get("type")
+    runtime_mode = runtime_mode_from_config(conf, runtime)
     if not isinstance(runtime_mode, str) or runtime_mode not in {"static", "service"}:
         raise ValidationError(
             f"Validation error in {conf_path}: runtime.mode must be either 'static' or 'service'"
         )
 
-    service_name = service.get("name")
+    service_name = coalesce_config_value(service.get("name"), conf.get("service_name"), f"{name}.service")
     if not isinstance(service_name, str) or not service_name.strip():
         raise ValidationError(f"Validation error in {conf_path}: missing required key 'service.name'")
 
-    if "www_redirect" in nginx and not isinstance(nginx["www_redirect"], bool):
+    www_redirect = nginx.get("www_redirect", conf.get("www_redirect", False))
+    if not isinstance(www_redirect, bool):
         raise ValidationError(
             f"Validation error in {conf_path}: optional key 'nginx.www_redirect' must be a boolean when provided"
         )
 
-    tls_hostnames = nginx.get("tls_hostnames", [])
-    if tls_hostnames is None:
-        tls_hostnames = []
+    if "github_token" in repo_auth and not isinstance(repo_auth["github_token"], str):
+        raise ValidationError(
+            f"Validation error in {conf_path}: optional key 'repo_auth.github_token' must be a string when provided"
+        )
+    if "github_username" in repo_auth and not isinstance(repo_auth["github_username"], str):
+        raise ValidationError(
+            f"Validation error in {conf_path}: optional key 'repo_auth.github_username' must be a string when provided"
+        )
+
+    tls_hostnames = nginx.get("tls_hostnames", MISSING)
+    if tls_hostnames is MISSING:
+        tls_hostnames = conf.get("tls_hostnames", MISSING)
+    if tls_hostnames is MISSING or tls_hostnames is None:
+        tls_hostnames = [domain]
     if not isinstance(tls_hostnames, list) or any(
         not isinstance(item, str) or not item.strip() for item in tls_hostnames
     ):
@@ -127,9 +177,9 @@ def normalize_server_conf(conf_path: Path) -> dict:
         )
 
     if runtime_mode == "service":
-        command = runtime.get("command")
-        port = runtime.get("port")
-        working_dir = runtime.get("working_dir", ".")
+        command = coalesce_config_value(runtime.get("command"), conf.get("command"))
+        port = coalesce_config_value(runtime.get("port"), conf.get("port"))
+        working_dir = coalesce_config_value(runtime.get("working_dir"), conf.get("working_dir"), ".")
         if not isinstance(command, str) or not command.strip():
             raise ValidationError(
                 f"Validation error in {conf_path}: missing required key 'runtime.command' for service mode"
@@ -157,14 +207,14 @@ def normalize_server_conf(conf_path: Path) -> dict:
             f"Validation error in {conf_path}: keep_releases must be a non-negative integer"
         )
 
-    health_retries = deploy.get("health_retries", runtime.get("health_retries", 20))
+    health_retries = deploy.get("health_retries", runtime.get("health_retries", conf.get("health_retries", 20)))
     if not isinstance(health_retries, int) or health_retries <= 0:
         raise ValidationError(
             f"Validation error in {conf_path}: health_retries must be a positive integer"
         )
 
     health_interval_seconds = deploy.get(
-        "health_interval_seconds", runtime.get("health_interval_seconds", 2)
+        "health_interval_seconds", runtime.get("health_interval_seconds", conf.get("health_interval_seconds", 2))
     )
     if not isinstance(health_interval_seconds, int) or health_interval_seconds <= 0:
         raise ValidationError(
@@ -173,11 +223,29 @@ def normalize_server_conf(conf_path: Path) -> dict:
 
     normalized_runtime = dict(runtime)
     normalized_runtime["mode"] = runtime_mode
-    normalized_runtime.setdefault("working_dir", ".")
-    normalized_runtime.setdefault("user", os.environ.get("USER", "root"))
-    normalized_runtime.setdefault("health_endpoint", "/health")
-    normalized_runtime.setdefault("health_retries", health_retries)
-    normalized_runtime.setdefault("health_interval_seconds", health_interval_seconds)
+    normalized_runtime["working_dir"] = str(
+        coalesce_config_value(runtime.get("working_dir"), conf.get("working_dir"), ".")
+    )
+    normalized_runtime["user"] = str(
+        coalesce_config_value(runtime.get("user"), conf.get("user"), os.environ.get("USER", "root"))
+    )
+    normalized_runtime["health_endpoint"] = str(
+        coalesce_config_value(runtime.get("health_endpoint"), conf.get("health_endpoint"), "/health")
+    )
+    normalized_runtime["health_retries"] = health_retries
+    normalized_runtime["health_interval_seconds"] = health_interval_seconds
+    runtime_env_file = coalesce_config_value(runtime.get("env_file"), conf.get("env_file"))
+    if runtime_env_file is not None:
+        normalized_runtime["env_file"] = runtime_env_file
+    if runtime_mode == "service":
+        normalized_runtime["command"] = command
+        normalized_runtime["port"] = port
+
+    reload_cmd = coalesce_config_value(service.get("reload_cmd"), conf.get("reload_cmd"))
+    normalized_service = dict(service)
+    normalized_service["name"] = service_name
+    if reload_cmd is not None:
+        normalized_service["reload_cmd"] = reload_cmd
 
     return {
         "name": name,
@@ -192,17 +260,28 @@ def normalize_server_conf(conf_path: Path) -> dict:
         "web_root": web_root,
         "build_output": build_output,
         "deploy_script": conf.get("deploy_script"),
-        "pre_deploy_cmd": deploy_hooks.get("pre_deploy"),
-        "build_cmd": deploy_hooks.get("build"),
-        "post_deploy_cmd": deploy_hooks.get("post_deploy") or service.get("reload_cmd"),
+        "pre_deploy_cmd": coalesce_config_value(
+            deploy_hooks.get("pre_deploy"), conf.get("pre_deploy_cmd"), conf.get("pre_deploy")
+        ),
+        "build_cmd": coalesce_config_value(deploy_hooks.get("build"), conf.get("build_cmd"), conf.get("build")),
+        "post_deploy_cmd": coalesce_config_value(
+            deploy_hooks.get("post_deploy"),
+            conf.get("post_deploy_cmd"),
+            conf.get("post_deploy"),
+            reload_cmd,
+        ),
         "git_ssh_command": conf.get("git_ssh_command"),
+        "repo_auth": {
+            "github_token": repo_auth.get("github_token"),
+            "github_username": repo_auth.get("github_username"),
+        },
         "unlighthouse_server_url": conf.get("unlighthouse_server_url"),
         "unlighthouse_server_token": conf.get("unlighthouse_server_token"),
         "unlighthouse_cmd": conf.get("unlighthouse_cmd"),
         "runtime": normalized_runtime,
-        "service": dict(service),
+        "service": normalized_service,
         "nginx": {
-            "www_redirect": bool(nginx.get("www_redirect", False)),
+            "www_redirect": www_redirect,
             "tls_hostnames": tls_hostnames,
         },
         "source_server_conf": str(conf_path),

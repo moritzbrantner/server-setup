@@ -31,15 +31,7 @@ test_discover_from_local_clone_with_autodetect_repo_branch() {
   "name": "server-setup",
   "domain": "server-setup.local",
   "build_output": ".",
-  "deploy_hooks": {
-    "build": "./scripts/run-self-checks.sh"
-  },
-  "runtime": {
-    "mode": "static"
-  },
-  "service": {
-    "name": "server-setup.service"
-  }
+  "build": "./scripts/run-self-checks.sh"
 }
 JSON
 
@@ -71,14 +63,7 @@ test_discover_falls_back_to_absolute_path_without_origin() {
 {
   "name": "no-origin",
   "domain": "no-origin.local",
-  "build_output": ".",
-  "deploy_hooks": {},
-  "runtime": {
-    "mode": "static"
-  },
-  "service": {
-    "name": "no-origin.service"
-  }
+  "build_output": "."
 }
 JSON
 
@@ -87,6 +72,38 @@ JSON
     assert_eq "$(pwd -P)" "$(jq -r '.[0].repo' "$tmp/sites.json")"
     assert_eq "trunk" "$(jq -r '.[0].branch' "$tmp/sites.json")"
   )
+
+  rm -rf "$tmp"
+}
+
+test_discover_accepts_top_level_service_shorthand() {
+  local tmp
+  tmp="$(make_temp_dir)"
+  mkdir -p "$tmp/apps/service-site"
+
+  cat > "$tmp/apps/service-site/server.conf" <<'JSON'
+{
+  "name": "service-site",
+  "repo": "git@github.com:example/service-site.git",
+  "branch": "main",
+  "domain": "service.test",
+  "build_output": "dist",
+  "build": "npm ci && npm run build",
+  "command": "PORT=3000 npm run start",
+  "port": 3000,
+  "health_endpoint": "/healthz",
+  "www_redirect": true
+}
+JSON
+
+  "$SCRIPT" --base-glob "$tmp/apps/*" --output "$tmp/sites.json"
+
+  assert_eq "service" "$(jq -r '.[0].runtime.mode' "$tmp/sites.json")"
+  assert_eq "PORT=3000 npm run start" "$(jq -r '.[0].runtime.command' "$tmp/sites.json")"
+  assert_eq "3000" "$(jq -r '.[0].runtime.port' "$tmp/sites.json")"
+  assert_eq "service-site.service" "$(jq -r '.[0].service.name' "$tmp/sites.json")"
+  assert_eq "service.test" "$(jq -r '.[0].nginx.tls_hostnames | join(" ")' "$tmp/sites.json")"
+  assert_eq "true" "$(jq -r '.[0].nginx.www_redirect' "$tmp/sites.json")"
 
   rm -rf "$tmp"
 }
@@ -103,13 +120,6 @@ test_discover_normalizes_nginx_settings() {
   "branch": "main",
   "domain": "example.test",
   "build_output": "dist",
-  "deploy_hooks": {},
-  "runtime": {
-    "mode": "static"
-  },
-  "service": {
-    "name": "nginx-site.service"
-  },
   "nginx": {
     "www_redirect": true,
     "tls_hostnames": ["example.test", "www.example.test"]
@@ -136,10 +146,7 @@ test_discover_rejects_duplicate_domains() {
   "repo": "git@github.com:example/one.git",
   "branch": "main",
   "domain": "dup.test",
-  "build_output": "dist",
-  "deploy_hooks": {},
-  "runtime": { "mode": "static" },
-  "service": { "name": "one.service" }
+  "build_output": "dist"
 }
 JSON
 
@@ -149,10 +156,7 @@ JSON
   "repo": "git@github.com:example/two.git",
   "branch": "main",
   "domain": "dup.test",
-  "build_output": "dist",
-  "deploy_hooks": {},
-  "runtime": { "mode": "static" },
-  "service": { "name": "two.service" }
+  "build_output": "dist"
 }
 JSON
 
@@ -177,13 +181,8 @@ test_discover_rejects_invalid_runtime_port() {
   "branch": "main",
   "domain": "bad-service.test",
   "build_output": "dist",
-  "deploy_hooks": {},
-  "runtime": {
-    "mode": "service",
-    "command": "npm run start",
-    "port": "abc"
-  },
-  "service": { "name": "bad-service.service" }
+  "command": "npm run start",
+  "port": "abc"
 }
 JSON
 
@@ -208,14 +207,9 @@ test_discover_rejects_absolute_runtime_working_dir() {
   "branch": "main",
   "domain": "bad-working-dir.test",
   "build_output": "dist",
-  "deploy_hooks": {},
-  "runtime": {
-    "mode": "service",
-    "command": "bun run start",
-    "working_dir": "/root/apps/bad-working-dir",
-    "port": 3000
-  },
-  "service": { "name": "bad-working-dir.service" }
+  "command": "bun run start",
+  "working_dir": "/root/apps/bad-working-dir",
+  "port": 3000
 }
 JSON
 
@@ -244,6 +238,7 @@ test_discover_fails_when_no_server_conf_files_are_found() {
 
 run_test "discover auto-detects repo/branch from local clone" test_discover_from_local_clone_with_autodetect_repo_branch
 run_test "discover falls back to absolute repo path when origin is missing" test_discover_falls_back_to_absolute_path_without_origin
+run_test "discover accepts top-level service shorthand" test_discover_accepts_top_level_service_shorthand
 run_test "discover normalizes nginx settings" test_discover_normalizes_nginx_settings
 run_test "discover rejects duplicate domains" test_discover_rejects_duplicate_domains
 run_test "discover rejects invalid runtime port" test_discover_rejects_invalid_runtime_port

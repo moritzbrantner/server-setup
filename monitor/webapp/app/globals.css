@@ -7,7 +7,9 @@
   --text: #edf7fb;
   --muted: #94b7c6;
   --ok: #78e08f;
+  --warn: #f4cb74;
   --bad: #ff8d7a;
+  --soft: rgba(255, 255, 255, 0.06);
   --shadow: 0 22px 80px rgba(0, 0, 0, 0.28);
 }
 
@@ -127,13 +129,15 @@ main {
 
 .summary-grid,
 .host-grid,
-.site-grid {
+.site-grid,
+.setup-grid,
+.alert-list {
   display: grid;
   gap: 16px;
 }
 
 .summary-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   margin-bottom: 18px;
 }
 
@@ -155,7 +159,9 @@ main {
 
 .section-head,
 .panel > .host-grid,
-.panel > .site-grid {
+.panel > .site-grid,
+.panel > .setup-grid,
+.panel > .alert-list {
   padding-inline: 24px;
 }
 
@@ -164,12 +170,91 @@ main {
 }
 
 .panel > .host-grid,
-.panel > .site-grid {
+.panel > .site-grid,
+.panel > .setup-grid,
+.panel > .alert-list {
   padding-bottom: 24px;
 }
 
 .host-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.alert-list {
+  grid-template-columns: 1fr;
+}
+
+.alert-card,
+.setup-card {
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015)),
+    rgba(255, 255, 255, 0.02);
+}
+
+.alert-card {
+  padding: 18px 20px;
+}
+
+.alert-ok {
+  box-shadow: inset 0 0 0 1px rgba(120, 224, 143, 0.12);
+}
+
+.alert-warning {
+  box-shadow: inset 0 0 0 1px rgba(244, 203, 116, 0.12);
+}
+
+.alert-critical {
+  box-shadow: inset 0 0 0 1px rgba(255, 141, 122, 0.12);
+}
+
+.alert-head,
+.setup-head,
+.setup-check-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+
+.alert-head h3,
+.setup-head h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.alert-head p,
+.setup-head p,
+.setup-check p,
+.setup-check span {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.setup-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.setup-card {
+  padding: 20px;
+}
+
+.setup-checks {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.setup-check {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: var(--soft);
+}
+
+.setup-check strong,
+.setup-check span {
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
 }
 
 .metric-card {
@@ -257,8 +342,16 @@ main {
   color: var(--ok);
 }
 
+.pill-warn {
+  color: var(--warn);
+}
+
 .pill-bad {
   color: var(--bad);
+}
+
+.pill-muted {
+  color: var(--muted);
 }
 
 .site-error,
@@ -272,7 +365,8 @@ main {
   .hero,
   .summary-grid,
   .host-grid,
-  .site-grid {
+  .site-grid,
+  .setup-grid {
     grid-template-columns: 1fr;
   }
 
@@ -297,7 +391,9 @@ main {
   .hero,
   .section-head,
   .panel > .host-grid,
-  .panel > .site-grid {
+  .panel > .site-grid,
+  .panel > .setup-grid,
+  .panel > .alert-list {
     padding-inline: 16px;
   }
 

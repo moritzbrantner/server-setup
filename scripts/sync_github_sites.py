@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 from pathlib import Path
 
 
@@ -29,6 +30,18 @@ def usage_description() -> str:
 
 class SyncError(RuntimeError):
     pass
+
+
+def first_config_value(*values: object) -> object:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                return value.strip()
+            continue
+        return value
+    return ""
 
 
 class SyncContext:
@@ -270,6 +283,26 @@ def shell_env_with_git_ssh(git_ssh_command: str) -> dict[str, str] | None:
     return env
 
 
+def github_repo_url_with_token(repo: str, username: str, token: str) -> str:
+    if not token:
+        return repo
+
+    safe_username = urllib.parse.quote(username or "x-access-token", safe="")
+    safe_token = urllib.parse.quote(token, safe="")
+
+    if repo.startswith("git@github.com:"):
+        repo = f"https://github.com/{repo.removeprefix('git@github.com:')}"
+
+    parsed = urllib.parse.urlparse(repo)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname != "github.com":
+        raise SyncError("repo_auth.github_token only supports GitHub HTTPS or git@github.com repository URLs.")
+
+    netloc = f"{safe_username}:{safe_token}@{parsed.hostname}"
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+
+
 def run_optional(ctx: SyncContext, cmd: str, where: str, site_name: str, cwd: Path) -> None:
     if not cmd or cmd == "null":
         return
@@ -307,9 +340,35 @@ def render_systemd_unit(name: str, command: str, working_dir: str, run_user: str
     )
 
 
+def runtime_service_name(site_json: dict, site_name: str) -> str:
+    service = site_json.get("service") or {}
+    configured_name = service.get("name")
+    if isinstance(configured_name, str) and configured_name.strip():
+        return configured_name.strip()
+    top_level_name = site_json.get("service_name")
+    if isinstance(top_level_name, str) and top_level_name.strip():
+        return top_level_name.strip()
+    if any(
+        key in site_json
+        for key in (
+            "command",
+            "port",
+            "build",
+            "pre_deploy",
+            "post_deploy",
+            "www_redirect",
+            "tls_hostnames",
+        )
+    ):
+        return f"{site_name}.service"
+    # Legacy fallback for older configs before service.name became canonical.
+    return f"app-{site_name}.service"
+
+
 def ensure_runtime_service(
     ctx: SyncContext,
     site_name: str,
+    service_name: str,
     runtime_mode: str,
     runtime_command: str,
     runtime_working_dir: str,
@@ -318,7 +377,7 @@ def ensure_runtime_service(
 ) -> None:
     if runtime_mode != "service":
         return
-    unit_path = ctx.systemd_unit_dir / f"app-{site_name}.service"
+    unit_path = ctx.systemd_unit_dir / service_name
     unit_content = render_systemd_unit(
         site_name, runtime_command, runtime_working_dir, runtime_user, runtime_env_file
     )
@@ -326,11 +385,11 @@ def ensure_runtime_service(
     if changed:
         ctx.log_event(site_name, "systemd-unit", "updated", str(unit_path))
         run_checked(["systemctl", "daemon-reload"])
-        run_checked(["systemctl", "enable", f"app-{site_name}.service"])
+        run_checked(["systemctl", "enable", service_name])
     else:
         ctx.log_event(site_name, "systemd-unit", "unchanged", str(unit_path))
     shutil.copyfile(unit_path, ctx.state_asset_path(site_name, "last-good-unit.service"))
-    run_checked(["systemctl", "restart", f"app-{site_name}.service"])
+    run_checked(["systemctl", "restart", service_name])
 
 
 def render_nginx_site_config(
@@ -561,6 +620,7 @@ def cleanup_old_releases(releases_dir: Path, keep_releases: int, current_target:
 def preflight_site(
     ctx: SyncContext,
     site_name: str,
+    service_name: str,
     runtime_mode: str,
     runtime_command: str,
     workdir: Path,
@@ -586,7 +646,7 @@ def preflight_site(
             raise SyncError(
                 f"Preflight failed for '{site_name}': runtime.working_dir must be relative to the deployed release, got '{runtime_working_dir}'"
             )
-        if not path_is_writable_or_creatable(ctx.systemd_unit_dir / f"app-{site_name}.service"):
+        if not path_is_writable_or_creatable(ctx.systemd_unit_dir / service_name):
             raise SyncError(f"Preflight failed for '{site_name}': systemd unit directory is not writable")
         runtime_bin = site_runtime_bin(runtime_command)
         if not runtime_bin or shutil.which(runtime_bin) is None:
@@ -604,7 +664,7 @@ def preflight_site(
     ctx.log_event(site_name, "preflight", "success", "validated deploy prerequisites")
 
 
-def restore_last_good_files(ctx: SyncContext, site_name: str) -> None:
+def restore_last_good_files(ctx: SyncContext, site_name: str, service_name: str) -> None:
     nginx_backup = ctx.state_asset_path(site_name, "last-good-nginx.conf")
     unit_backup = ctx.state_asset_path(site_name, "last-good-unit.service")
     site_conf = ctx.nginx_site_available_dir / f"{site_name}.conf"
@@ -622,9 +682,9 @@ def restore_last_good_files(ctx: SyncContext, site_name: str) -> None:
 
     if unit_backup.is_file():
         ctx.systemd_unit_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(unit_backup, ctx.systemd_unit_dir / f"app-{site_name}.service")
+        shutil.copyfile(unit_backup, ctx.systemd_unit_dir / service_name)
         run(["systemctl", "daemon-reload"])
-        run(["systemctl", "restart", f"app-{site_name}.service"])
+        run(["systemctl", "restart", service_name])
 
 
 def run_unlighthouse(
@@ -662,20 +722,53 @@ def run_unlighthouse(
 
 def resolve_site_fields(site_json: dict) -> dict:
     name = str(resolve_config_value("site", "name", site_json.get("name", "")))
+    repo_auth = site_json.get("repo_auth") or {}
+    runtime = site_json.get("runtime") or {}
+    nginx = site_json.get("nginx") or {}
+    domain = resolve_config_value(name, "domain", site_json.get("domain", ""))
+    inferred_runtime_mode = first_config_value(
+        runtime.get("mode"),
+        runtime.get("type"),
+        site_json.get("runtime_mode"),
+        site_json.get("mode"),
+    )
+    if not inferred_runtime_mode:
+        inferred_runtime_mode = (
+            "service"
+            if first_config_value(runtime.get("command"), site_json.get("command"), runtime.get("port"), site_json.get("port"))
+            else "static"
+        )
     fields = {
         "name": name,
+        "service_name": resolve_config_value(name, "service.name", runtime_service_name(site_json, name)),
         "repo": resolve_config_value(name, "repo", site_json.get("repo", "")),
         "branch": resolve_config_value(name, "branch", site_json.get("branch", "main")),
-        "workdir": resolve_config_value(name, "workdir", site_json.get("workdir", "")),
+        "workdir": resolve_config_value(
+            name,
+            "workdir",
+            first_config_value(site_json.get("workdir"), f"/srv/github-sites/{name}"),
+        ),
         "releases_dir": resolve_config_value(name, "releases_dir", site_json.get("releases_dir", "")),
         "current_symlink": resolve_config_value(name, "current_symlink", site_json.get("current_symlink", "")),
         "keep_releases": int(resolve_config_value(name, "keep_releases", site_json.get("keep_releases", 5))),
         "site_url": resolve_config_value(name, "site_url", site_json.get("site_url", "")),
         "git_ssh_command": resolve_config_value(name, "git_ssh_command", site_json.get("git_ssh_command", "")),
         "deploy_script": resolve_config_value(name, "deploy_script", site_json.get("deploy_script", "")),
-        "pre_deploy_cmd": resolve_config_value(name, "pre_deploy_cmd", site_json.get("pre_deploy_cmd", "")),
-        "build_cmd": resolve_config_value(name, "build_cmd", site_json.get("build_cmd", "")),
-        "post_deploy_cmd": resolve_config_value(name, "post_deploy_cmd", site_json.get("post_deploy_cmd", "")),
+        "pre_deploy_cmd": resolve_config_value(
+            name,
+            "pre_deploy_cmd",
+            first_config_value(site_json.get("pre_deploy_cmd"), site_json.get("pre_deploy")),
+        ),
+        "build_cmd": resolve_config_value(
+            name,
+            "build_cmd",
+            first_config_value(site_json.get("build_cmd"), site_json.get("build")),
+        ),
+        "post_deploy_cmd": resolve_config_value(
+            name,
+            "post_deploy_cmd",
+            first_config_value(site_json.get("post_deploy_cmd"), site_json.get("post_deploy"), site_json.get("reload_cmd")),
+        ),
         "unlighthouse_cmd": resolve_config_value(name, "unlighthouse_cmd", site_json.get("unlighthouse_cmd", "")),
         "unlighthouse_server_url": resolve_config_value(
             name, "unlighthouse_server_url", site_json.get("unlighthouse_server_url", "")
@@ -683,29 +776,73 @@ def resolve_site_fields(site_json: dict) -> dict:
         "unlighthouse_server_token": resolve_config_value(
             name, "unlighthouse_server_token", site_json.get("unlighthouse_server_token", "")
         ),
-        "domain": resolve_config_value(name, "domain", site_json.get("domain", "")),
-        "web_root": resolve_config_value(name, "web_root", site_json.get("web_root", "")),
-        "build_output": resolve_config_value(name, "build_output", site_json.get("build_output", "")),
+        "domain": domain,
+        "web_root": resolve_config_value(
+            name,
+            "web_root",
+            first_config_value(site_json.get("web_root"), site_json.get("root")),
+        ),
+        "build_output": resolve_config_value(
+            name,
+            "build_output",
+            first_config_value(site_json.get("build_output"), site_json.get("output_dir")),
+        ),
+        "repo_auth_github_token": resolve_config_value(
+            name, "repo_auth.github_token", repo_auth.get("github_token", "")
+        ),
+        "repo_auth_github_username": resolve_config_value(
+            name, "repo_auth.github_username", repo_auth.get("github_username", "x-access-token")
+        ),
     }
-    runtime = site_json.get("runtime") or {}
-    nginx = site_json.get("nginx") or {}
     fields.update(
         {
-            "runtime_mode": resolve_config_value(name, "runtime.mode", runtime.get("mode") or runtime.get("type") or "static"),
-            "runtime_command": resolve_config_value(name, "runtime.command", runtime.get("command", "")),
-            "runtime_working_dir": resolve_config_value(name, "runtime.working_dir", runtime.get("working_dir", ".")),
-            "runtime_user": resolve_config_value(name, "runtime.user", runtime.get("user", os.environ.get("USER", ""))),
-            "runtime_env_file": resolve_config_value(name, "runtime.env_file", runtime.get("env_file", "")),
-            "runtime_port": str(resolve_config_value(name, "runtime.port", runtime.get("port", "")) or ""),
+            "runtime_mode": resolve_config_value(name, "runtime.mode", inferred_runtime_mode),
+            "runtime_command": resolve_config_value(
+                name,
+                "runtime.command",
+                first_config_value(runtime.get("command"), site_json.get("command")),
+            ),
+            "runtime_working_dir": resolve_config_value(
+                name,
+                "runtime.working_dir",
+                first_config_value(runtime.get("working_dir"), site_json.get("working_dir"), "."),
+            ),
+            "runtime_user": resolve_config_value(
+                name,
+                "runtime.user",
+                first_config_value(runtime.get("user"), site_json.get("user"), os.environ.get("USER", "")),
+            ),
+            "runtime_env_file": resolve_config_value(
+                name,
+                "runtime.env_file",
+                first_config_value(runtime.get("env_file"), site_json.get("env_file")),
+            ),
+            "runtime_port": str(
+                resolve_config_value(name, "runtime.port", first_config_value(runtime.get("port"), site_json.get("port"))) or ""
+            ),
             "runtime_health_endpoint": resolve_config_value(
-                name, "runtime.health_endpoint", runtime.get("health_endpoint", "/health")
+                name,
+                "runtime.health_endpoint",
+                first_config_value(runtime.get("health_endpoint"), site_json.get("health_endpoint"), "/health"),
             ),
-            "health_retries": int(resolve_config_value(name, "runtime.health_retries", runtime.get("health_retries", 20))),
+            "health_retries": int(
+                resolve_config_value(
+                    name,
+                    "runtime.health_retries",
+                    first_config_value(runtime.get("health_retries"), site_json.get("health_retries"), 20),
+                )
+            ),
             "health_interval_seconds": int(
-                resolve_config_value(name, "runtime.health_interval_seconds", runtime.get("health_interval_seconds", 2))
+                resolve_config_value(
+                    name,
+                    "runtime.health_interval_seconds",
+                    first_config_value(runtime.get("health_interval_seconds"), site_json.get("health_interval_seconds"), 2),
+                )
             ),
-            "nginx_www_redirect": bool(nginx.get("www_redirect", False)),
-            "nginx_tls_hostnames_csv": " ".join(nginx.get("tls_hostnames", []) or []),
+            "nginx_www_redirect": bool(first_config_value(nginx.get("www_redirect"), site_json.get("www_redirect"), False)),
+            "nginx_tls_hostnames_csv": " ".join(
+                first_config_value(nginx.get("tls_hostnames"), site_json.get("tls_hostnames"), []) or []
+            ),
         }
     )
     if not fields["unlighthouse_server_url"]:
@@ -718,6 +855,12 @@ def resolve_site_fields(site_json: dict) -> dict:
         fields["current_symlink"] = f"{fields['workdir']}/current"
     if not fields["runtime_user"]:
         fields["runtime_user"] = os.environ.get("USER") or subprocess.check_output(["id", "-un"], text=True).strip()
+    if fields["repo_auth_github_token"]:
+        fields["repo"] = github_repo_url_with_token(
+            str(fields["repo"]),
+            str(fields["repo_auth_github_username"]),
+            str(fields["repo_auth_github_token"]),
+        )
     return fields
 
 
@@ -733,6 +876,7 @@ def deploy_site(ctx: SyncContext, site_json: dict) -> None:
     preflight_site(
         ctx,
         name,
+        str(site["service_name"]),
         str(site["runtime_mode"]),
         str(site["runtime_command"]),
         workdir,
@@ -782,6 +926,7 @@ def deploy_site(ctx: SyncContext, site_json: dict) -> None:
         ensure_runtime_service(
             ctx,
             name,
+            str(site["service_name"]),
             str(site["runtime_mode"]),
             str(site["runtime_command"]),
             runtime_working_dir,
@@ -873,7 +1018,7 @@ def rollback_site(ctx: SyncContext, config: list[dict], site_name: str) -> None:
         if site.get("name") == site_name:
             current_symlink = site.get("current_symlink", "")
             break
-    restore_last_good_files(ctx, site_name)
+    restore_last_good_files(ctx, site_name, runtime_service_name(site, site_name))
     atomic_switch_symlink(Path(current_symlink), Path(previous_target))
     state_mark_rollback(ctx, site_name, Path(previous_target))
     ctx.log_event(site_name, "rollback", "success", previous_target)
@@ -944,7 +1089,7 @@ def main() -> None:
             process_site_with_lock(ctx, site_name, site)
         except Exception:
             state_mark_failure(ctx, site_name, "deployment failed")
-            restore_last_good_files(ctx, site_name)
+            restore_last_good_files(ctx, site_name, runtime_service_name(site, site_name))
             ctx.log_event(site_name, "deploy", "failed", "deployment failed", "error")
             raise
     print("Done syncing configured GitHub sites.")
