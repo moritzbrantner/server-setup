@@ -192,6 +192,37 @@ What it does:
 - Captures the current release pointer, atomically switches `current_symlink` to the new release on success, then runs `post_deploy_cmd`.
 - Runs Unlighthouse after deployment to collect website metrics.
 
+### Shutdown and reset helpers
+
+To stop repo-managed websites and deploy triggers without deleting configuration:
+
+```bash
+sudo ./scripts/shutdown-websites.sh
+```
+
+What it stops by default:
+- repo-managed runtime services discovered from `deploy/sites.json`
+- `nginx.service`
+- deploy automation services (`site-apps-watcher.service`, `site-webhook-receiver.service`, `site-discovery-deploy.service`, `site-discovery-deploy.timer`)
+- `server-setup-status-webapp.service`
+
+Use `--dry-run` to inspect the plan first, or `--skip-nginx`, `--skip-automation`, and `--skip-status-webapp` to leave parts running.
+
+To reset repo-managed service settings and generated host files:
+
+```bash
+sudo ./scripts/reset-server-setup.sh --yes
+```
+
+What it removes:
+- repo-managed systemd units in `/etc/systemd/system`
+- per-site nginx configs generated from `deploy/sites.json`
+- repo-managed env files under `/etc/default`
+- deploy state under `/var/lib/server-setup/state`
+- automation lock/log paths (`/var/lock/site-discovery-deploy.lock`, `/var/lock/server-setup`, `/var/log/server-setup`)
+
+`reset-server-setup.sh` also stops/disables the managed services first, then runs `systemctl daemon-reload`. Use `--dry-run` to preview the actions, and `--stop-nginx` if you want nginx stopped instead of reloaded after managed site configs are removed.
+
 #### Stable `server.conf` format (JSON)
 
 Every discovered repository must include `server.conf` at the repo root. The shortest useful forms are:

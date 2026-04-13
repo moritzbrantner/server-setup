@@ -16,8 +16,18 @@ test_serve_domain_python_entrypoint_shows_help() {
   python3 "$ROOT_DIR/scripts/serve_domain.py" --help >/dev/null
 }
 
+test_shutdown_websites_python_entrypoint_shows_help() {
+  python3 "$ROOT_DIR/scripts/shutdown_websites.py" --help >/dev/null
+}
+
+test_reset_server_setup_python_entrypoint_shows_help() {
+  python3 "$ROOT_DIR/scripts/reset_server_setup.py" --help >/dev/null
+}
+
 run_test "init_server.py help works" test_init_server_python_entrypoint_shows_help
 run_test "onboard_app.py help works" test_onboard_app_python_entrypoint_shows_help
 run_test "serve_domain.py help works" test_serve_domain_python_entrypoint_shows_help
+run_test "shutdown_websites.py help works" test_shutdown_websites_python_entrypoint_shows_help
+run_test "reset_server_setup.py help works" test_reset_server_setup_python_entrypoint_shows_help
 
 echo "All tests passed: $pass_count"
