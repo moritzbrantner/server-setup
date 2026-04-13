@@ -39,21 +39,22 @@ def parse_args() -> argparse.Namespace:
 
 
 def collect_missing(args: argparse.Namespace) -> None:
-    if not args.skip_tls and not args.email:
+    interactive = args.interactive or sys.stdin.isatty()
+    if interactive and not args.skip_tls and not args.email:
         args.skip_tls = prompt_bool("Skip TLS provisioning?", default=False)
     required = ["repo_url", "dest"]
     if not args.skip_tls:
         required.append("email")
     ensure_interactive(args, required)
-    if not args.repo_url:
+    if interactive and not args.repo_url:
         args.repo_url = prompt_text("Git repository URL", required=True)
-    if not args.dest:
+    if interactive and not args.dest:
         args.dest = prompt_text("Checkout destination", required=True)
-    if not args.branch:
+    if interactive and not args.branch:
         args.branch = prompt_text("Branch override", default="")
-    if not args.skip_tls and not args.email:
+    if interactive and not args.skip_tls and not args.email:
         args.email = prompt_text("Let's Encrypt email", required=True)
-    if not args.dry_run:
+    if interactive and not args.dry_run:
         args.dry_run = prompt_bool("Run dry-run only?", default=False)
 
 
