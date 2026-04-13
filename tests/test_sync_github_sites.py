@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import sys
 import unittest
+
+ROOT_DIR = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR / "scripts"))
 
 
 def load_module():
-    path = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "sync_github_sites.py"
+    path = ROOT_DIR / "scripts" / "sync_github_sites.py"
     spec = importlib.util.spec_from_file_location("sync_github_sites", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader

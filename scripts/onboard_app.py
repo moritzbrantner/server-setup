@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 from interactive_cli import ensure_interactive, maybe_sudo, prompt_bool, prompt_text, repo_root, run_command
+from simple_setup_common import git_command_with_github_auth
 
 
 def run_checked(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -62,7 +63,7 @@ def repo_checkout(repo_url: str, dest: Path) -> None:
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         print(f"[1/7] Cloning repository into {dest}")
-        run_checked(["git", "clone", repo_url, str(dest)])
+        run_checked(git_command_with_github_auth(repo_url, "clone", repo_url, str(dest)))
         return
     if not (dest / ".git").is_dir():
         raise SystemExit(f"Destination exists but is not a git repository: {dest}")
@@ -76,7 +77,7 @@ def repo_checkout(repo_url: str, dest: Path) -> None:
     if not existing_origin:
         run_checked(["git", "-C", str(dest), "remote", "add", "origin", repo_url])
     print(f"[1/7] Updating existing repository at {dest}")
-    run_checked(["git", "-C", str(dest), "fetch", "--prune", "origin"])
+    run_checked(git_command_with_github_auth(repo_url, "-C", str(dest), "fetch", "--prune", "origin"))
 
 
 def checkout_branch(dest: Path, branch: str) -> None:
@@ -144,7 +145,7 @@ def main() -> None:
         if args.dry_run:
             temp_checkout = Path(tempfile.mkdtemp()) / "repo"
             print("[1/7] Cloning repository into temporary dry-run checkout")
-            run_checked(["git", "clone", args.repo_url, str(temp_checkout)])
+            run_checked(git_command_with_github_auth(args.repo_url, "clone", args.repo_url, str(temp_checkout)))
             work_dest = temp_checkout
         else:
             repo_checkout(args.repo_url, work_dest)

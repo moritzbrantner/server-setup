@@ -16,6 +16,8 @@ import time
 import urllib.parse
 from pathlib import Path
 
+from simple_setup_common import git_command_with_github_auth
+
 
 def utc_timestamp() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -900,8 +902,8 @@ def deploy_site(ctx: SyncContext, site_json: dict) -> None:
     ctx.log_event(name, "deploy", "running", f"release={release_dir}")
 
     git_env = shell_env_with_git_ssh(str(site["git_ssh_command"]))
-    run_checked(["git", "clone", str(site["repo"]), str(release_dir)], env=git_env)
-    run_checked(["git", "fetch", "--prune", "origin"], cwd=release_dir, env=git_env)
+    run_checked(git_command_with_github_auth(str(site["repo"]), "clone", str(site["repo"]), str(release_dir)), env=git_env)
+    run_checked(git_command_with_github_auth(str(site["repo"]), "fetch", "--prune", "origin"), cwd=release_dir, env=git_env)
     run_checked(["git", "checkout", str(site["branch"])], cwd=release_dir, env=git_env)
     run_checked(["git", "reset", "--hard", f"origin/{site['branch']}"], cwd=release_dir, env=git_env)
     run_optional(ctx, str(site["pre_deploy_cmd"]), "pre-deploy", name, release_dir)

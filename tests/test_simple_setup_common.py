@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import base64
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
 
-from simple_setup_common import github_repo_full_name, merge_csv_values, update_env_file
+from simple_setup_common import git_command_with_github_auth, github_repo_full_name, merge_csv_values, update_env_file
 
 
 class SimpleSetupCommonTests(unittest.TestCase):
@@ -40,6 +43,99 @@ class SimpleSetupCommonTests(unittest.TestCase):
                 path.read_text(encoding="utf-8"),
                 "# comment\nFOO=new\n\nBAR=added\n",
             )
+
+    def test_git_command_with_github_auth_uses_active_gh_token(self) -> None:
+        expected = base64.b64encode(b"x-access-token:secret-token").decode("ascii")
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("simple_setup_common.shutil.which", return_value="/usr/bin/gh"):
+                with patch(
+                    "simple_setup_common.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        ["gh", "auth", "token", "--hostname", "github.com"],
+                        0,
+                        stdout="secret-token\n",
+                        stderr="",
+                    ),
+                ) as run_mock:
+                    cmd = git_command_with_github_auth(
+                        "https://github.com/example/app.git",
+                        "clone",
+                        "https://github.com/example/app.git",
+                        "/tmp/app",
+                    )
+
+        self.assertEqual(
+            cmd,
+            [
+                "git",
+                "-c",
+                f"http.https://github.com/.extraheader=AUTHORIZATION: basic {expected}",
+                "clone",
+                "https://github.com/example/app.git",
+                "/tmp/app",
+            ],
+        )
+        run_mock.assert_called_once()
+
+    def test_git_command_with_github_auth_uses_sudo_user_gh_token_when_running_as_root(self) -> None:
+        expected = base64.b64encode(b"x-access-token:secret-token").decode("ascii")
+        with patch.dict("os.environ", {"USER": "root", "SUDO_USER": "moenarch"}, clear=True):
+            with patch(
+                "simple_setup_common.shutil.which",
+                side_effect=lambda name: f"/usr/bin/{name}" if name in {"gh", "sudo"} else None,
+            ):
+                with patch(
+                    "simple_setup_common.subprocess.run",
+                    side_effect=[
+                        subprocess.CompletedProcess(["gh", "auth", "token", "--hostname", "github.com"], 1, stdout="", stderr=""),
+                        subprocess.CompletedProcess(
+                            ["sudo", "-u", "moenarch", "-H", "gh", "auth", "token", "--hostname", "github.com"],
+                            0,
+                            stdout="secret-token\n",
+                            stderr="",
+                        ),
+                    ],
+                ) as run_mock:
+                    cmd = git_command_with_github_auth(
+                        "https://github.com/example/app.git",
+                        "fetch",
+                        "--prune",
+                        "origin",
+                    )
+
+        self.assertEqual(
+            cmd,
+            [
+                "git",
+                "-c",
+                f"http.https://github.com/.extraheader=AUTHORIZATION: basic {expected}",
+                "fetch",
+                "--prune",
+                "origin",
+            ],
+        )
+        self.assertEqual(run_mock.call_count, 2)
+
+    def test_git_command_with_github_auth_skips_urls_with_embedded_credentials(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("simple_setup_common.subprocess.run") as run_mock:
+                cmd = git_command_with_github_auth(
+                    "https://user:token@github.com/example/app.git",
+                    "clone",
+                    "https://user:token@github.com/example/app.git",
+                    "/tmp/app",
+                )
+
+        self.assertEqual(
+            cmd,
+            [
+                "git",
+                "clone",
+                "https://user:token@github.com/example/app.git",
+                "/tmp/app",
+            ],
+        )
+        run_mock.assert_not_called()
 
 
 if __name__ == "__main__":

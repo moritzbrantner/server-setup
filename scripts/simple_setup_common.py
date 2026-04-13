@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import json
 import os
 import secrets
@@ -151,6 +152,54 @@ def github_repo_full_name(repo_url: str) -> str:
         return ""
     parts = [part for part in parsed.path.removesuffix(".git").split("/") if part]
     return "/".join(parts[:2]) if len(parts) >= 2 else ""
+
+
+def github_auth_token_from_gh() -> str:
+    if shutil.which("gh") is None:
+        return ""
+
+    candidates: list[list[str]] = [["gh", "auth", "token", "--hostname", "github.com"]]
+    sudo_user = os.environ.get("SUDO_USER", "").strip()
+    current_user = os.environ.get("USER", "").strip()
+    if sudo_user and sudo_user != current_user:
+        if shutil.which("sudo") is not None:
+            candidates.append(["sudo", "-u", sudo_user, "-H", "gh", "auth", "token", "--hostname", "github.com"])
+        elif shutil.which("runuser") is not None:
+            candidates.append(["runuser", "-u", sudo_user, "--", "gh", "auth", "token", "--hostname", "github.com"])
+
+    seen: set[tuple[str, ...]] = set()
+    for cmd in candidates:
+        key = tuple(cmd)
+        if key in seen:
+            continue
+        seen.add(key)
+        result = subprocess.run(cmd, text=True, capture_output=True, check=False)
+        token = (result.stdout or "").strip()
+        if result.returncode == 0 and token:
+            return token
+    return ""
+
+
+def git_command_with_github_auth(repo_url: str, *git_args: str) -> list[str]:
+    cmd = ["git"]
+    parsed = urllib.parse.urlparse(repo_url)
+    if (
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname == "github.com"
+        and parsed.username is None
+        and parsed.password is None
+    ):
+        token = github_auth_token_from_gh()
+        if token:
+            basic_auth = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+            cmd.extend(
+                [
+                    "-c",
+                    f"http.https://github.com/.extraheader=AUTHORIZATION: basic {basic_auth}",
+                ]
+            )
+    cmd.extend(git_args)
+    return cmd
 
 
 def generate_webhook_secret() -> str:
