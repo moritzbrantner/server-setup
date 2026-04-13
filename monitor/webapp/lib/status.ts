@@ -178,7 +178,7 @@ async function defaultConfigPath(): Promise<string> {
     return resolveRepoPath(configured);
   }
 
-  const deployConfig = resolveRepoPath("deploy/sites.json");
+  const deployConfig = resolveRepoPath("deploy/registry.json");
   if (await pathExists(deployConfig)) {
     return deployConfig;
   }
@@ -641,9 +641,7 @@ function parseEnvFile(raw: string): ParsedEnvFile {
 }
 
 async function getAutomationChecks(): Promise<SetupCheck[]> {
-  const watcher = await getUnitStatus("site-apps-watcher.service");
   const webhook = await getUnitStatus("site-webhook-receiver.service");
-  const timer = await getUnitStatus("site-discovery-deploy.timer");
   const envFilePath = systemPath("STATUS_AUTOMATION_ENV_FILE", "/etc/default/site-automation");
   const envFileExists = await pathExists(envFilePath);
   const envRaw = envFileExists ? await readTextFile(envFilePath) : null;
@@ -652,25 +650,11 @@ async function getAutomationChecks(): Promise<SetupCheck[]> {
 
   return [
     unitCheck(
-      "automation-watcher",
-      "Apps watcher",
-      watcher,
-      "warning",
-      "systemctl is unavailable, so watcher status could not be determined."
-    ),
-    unitCheck(
       "automation-webhook",
       "Webhook receiver",
       webhook,
       "warning",
       "systemctl is unavailable, so webhook status could not be determined."
-    ),
-    unitCheck(
-      "automation-timer",
-      "Fallback deploy timer",
-      timer,
-      "warning",
-      "systemctl is unavailable, so timer status could not be determined."
     ),
     {
       id: "automation-env-file",

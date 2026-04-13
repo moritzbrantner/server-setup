@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from registry_contract import DEFAULT_REGISTRY_PATH
 from site_cleanup_common import AUTOMATION_UNITS, load_managed_sites
 
 
@@ -16,12 +17,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Stop repo-managed websites and deployment triggers without deleting configuration."
     )
-    parser.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "deploy/sites.json"))
+    parser.add_argument("--config", default=str(DEFAULT_REGISTRY_PATH))
     parser.add_argument("--skip-nginx", action="store_true", help="Leave nginx running.")
     parser.add_argument(
         "--skip-automation",
         action="store_true",
-        help="Leave watcher/webhook/timer services running.",
+        help="Leave webhook automation running.",
     )
     parser.add_argument(
         "--skip-status-webapp",

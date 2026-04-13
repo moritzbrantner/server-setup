@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-Environment=EXAMPLE_APPS_CONFIG_PATH=/opt/server-setup/deploy/sites.json
+Environment=EXAMPLE_APPS_DIR=/srv/apps
 Environment=SKIP_UNLIGHTHOUSE=1
 ExecStart=/usr/bin/env bash /opt/server-setup/scripts/start-example-apps.sh
 RemainAfterExit=yes

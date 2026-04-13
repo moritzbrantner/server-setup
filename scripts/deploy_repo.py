@@ -2,139 +2,89 @@
 from __future__ import annotations
 
 import argparse
-import json
-import sys
-import tempfile
+import os
 from pathlib import Path
 
-from simple_setup_common import (
-    AUTOMATION_ENV_FILE,
-    detect_webhook_url,
-    generate_webhook_secret,
-    github_repo_full_name,
-    load_env_file,
-    maybe_allow_ufw_port,
-    maybe_configure_github_webhook,
-    repo_root,
-    require_root,
-    run_checked,
-    setup_automation_units,
-    update_env_file,
-    merge_csv_values,
-)
+from deploy_engine import build_registry_entry, clone_or_update_checkout, deploy_registry_entry, repo_basename, update_automation_env
+from registry_contract import DEFAULT_REGISTRY_PATH
+from simple_setup_common import AUTOMATION_ENV_FILE, generate_webhook_secret, load_env_file, repo_root, require_root, run_checked, setup_automation_units
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Clone a repo, deploy it, and wire up webhook-based redeploys.")
     parser.add_argument("--repo-url", required=True)
-    parser.add_argument("--dest", required=True)
-    parser.add_argument("--config", default="deploy/sites.json")
+    parser.add_argument("--dest", default="")
     parser.add_argument("--branch", default="")
-    parser.add_argument("--webhook-secret", default="")
-    parser.add_argument("--webhook-url", default="")
+    parser.add_argument("--email", default="")
     parser.add_argument("--skip-github-hook", action="store_true")
     return parser.parse_args()
-
-
-def update_automation_env(
-    root: Path,
-    dest: Path,
-    config_path: str,
-    repo_url: str,
-    branch: str,
-    webhook_secret: str,
-) -> tuple[str, str]:
-    env_before = load_env_file(AUTOMATION_ENV_FILE)
-    repo_full_name = github_repo_full_name(repo_url)
-    webhook_url = detect_webhook_url("")
-
-    updates = {
-        "REPO_ROOT": str(root),
-        "APPS_DIR": str(dest.parent),
-        "APPS_GLOB": str(dest.parent / "*"),
-        "CONFIG_PATH": str((root / config_path) if not Path(config_path).is_absolute() else Path(config_path)),
-        "WEBHOOK_SECRET": webhook_secret,
-        "WEBHOOK_ALLOW_INSECURE": "false",
-    }
-    if repo_full_name:
-        updates["WEBHOOK_ALLOWED_REPOS"] = merge_csv_values(env_before.get("WEBHOOK_ALLOWED_REPOS", ""), [repo_full_name])
-    if branch:
-        updates["WEBHOOK_ALLOWED_BRANCHES"] = merge_csv_values(env_before.get("WEBHOOK_ALLOWED_BRANCHES", ""), [branch])
-    update_env_file(AUTOMATION_ENV_FILE, updates)
-    return (repo_full_name, webhook_url)
 
 
 def main() -> None:
     args = parse_args()
     require_root()
     root = repo_root()
-    dest = Path(args.dest).resolve()
-    webhook_secret = args.webhook_secret or load_env_file(AUTOMATION_ENV_FILE).get("WEBHOOK_SECRET") or generate_webhook_secret()
+    registry_path = Path(os.environ.get("REGISTRY_PATH", str(DEFAULT_REGISTRY_PATH)))
+    default_dest = Path("/srv/apps") / repo_basename(args.repo_url)
+    dest = Path(args.dest or default_dest).resolve()
+    env_file = load_env_file(AUTOMATION_ENV_FILE)
+    tls_email = args.email.strip() or env_file.get("DEFAULT_TLS_EMAIL", "").strip()
+    if not tls_email:
+        raise SystemExit(
+            "--email is required unless DEFAULT_TLS_EMAIL is already configured in /etc/default/site-automation"
+        )
+    webhook_secret = env_file.get("WEBHOOK_SECRET", "").strip() or generate_webhook_secret()
 
-    print("[1/4] Installing deploy automation services")
+    print("[1/5] Installing deploy automation services")
     setup_automation_units(root, start_webhook=False)
 
-    print("[2/4] Cloning and deploying repository")
-    with tempfile.NamedTemporaryFile("w+", delete=False, encoding="utf-8") as handle:
-        summary_path = Path(handle.name)
-    onboard_cmd = [
-        "python3",
-        str(root / "scripts/onboard_app.py"),
-        "--repo-url",
-        args.repo_url,
-        "--dest",
-        str(dest),
-        "--config",
-        args.config,
-        "--skip-tls",
-        "--summary-output",
-        str(summary_path),
-    ]
-    if args.branch:
-        onboard_cmd.extend(["--branch", args.branch])
-    if sys.stdin.isatty():
-        onboard_cmd.append("--interactive")
-    try:
-        run_checked(onboard_cmd, cwd=root)
-        site = json.loads(summary_path.read_text(encoding="utf-8"))
-    finally:
-        summary_path.unlink(missing_ok=True)
-    branch = args.branch or str(site.get("branch") or "main")
-    service_name = ((site.get("service") or {}).get("name") or f"{site['name']}.service")
+    print("[2/5] Cloning or updating repository checkout")
+    branch = clone_or_update_checkout(args.repo_url, dest, args.branch)
 
-    print("[3/4] Configuring webhook receiver")
-    repo_full_name, detected_webhook_url = update_automation_env(
-        root,
-        dest,
-        args.config,
+    print("[3/5] Validating server.conf and updating registry")
+    entry = build_registry_entry(
+        registry_path,
         args.repo_url,
         branch,
-        webhook_secret,
+        dest,
+    )
+
+    print("[4/5] Configuring webhook receiver")
+    repo_full_name, detected_webhook_url = update_automation_env(
+        repo_root=root,
+        registry_path=registry_path,
+        webhook_secret=webhook_secret,
+        repo_url=args.repo_url,
+        branch=branch,
+        checkout_path=dest,
+        default_tls_email=tls_email,
     )
     run_checked(["systemctl", "restart", "site-webhook-receiver.service"])
-    run_checked(["systemctl", "restart", "site-apps-watcher.service"])
-    run_checked(["systemctl", "restart", "site-discovery-deploy.timer"])
-    maybe_allow_ufw_port("9001/tcp")
-
-    webhook_url = detect_webhook_url(args.webhook_url) if args.webhook_url else detected_webhook_url
-    hook_status = ("skipped", "github hook setup was skipped by request")
-    if not args.skip_github_hook:
-        hook_status = maybe_configure_github_webhook(repo_full_name, webhook_url, webhook_secret)
-
-    print("[4/4] Deployment summary")
-    print(
-        f"Site: {site['name']}\n"
-        f"Domain: {site['domain']}\n"
-        f"Service: {service_name}\n"
-        f"Repository checkout: {dest}\n"
-        f"Webhook URL: {webhook_url or '<undetected>'}\n"
-        f"Webhook secret: {webhook_secret}\n"
-        f"GitHub webhook: {hook_status[0]} ({hook_status[1]})"
+    print("[5/5] Deploying repository")
+    result = deploy_registry_entry(
+        entry,
+        tls_email=tls_email,
+        configure_webhook=not args.skip_github_hook,
+        webhook_secret=webhook_secret,
+        webhook_url=detected_webhook_url,
     )
-    if hook_status[0] != "ok":
+
+    print("[done] Deployment summary")
+    print(
+        f"Site: {result.name}\n"
+        f"Domain: {result.domain}\n"
+        f"Service: {result.service_name}\n"
+        f"Repository checkout: {dest}\n"
+        f"Branch: {result.branch}\n"
+        f"Registry: {registry_path}\n"
+        f"Webhook URL: {result.webhook_url or '<undetected>'}\n"
+        f"Webhook secret: {webhook_secret}\n"
+        f"GitHub webhook: {result.hook_status[0]} ({result.hook_status[1]})"
+    )
+    if result.hook_status[0] != "ok":
         print(
             "\nManual GitHub webhook values:\n"
-            f"- Payload URL: {webhook_url or 'set this manually'}\n"
+            f"- Payload URL: {result.webhook_url or 'set this manually'}\n"
             "- Content type: application/json\n"
             f"- Secret: {webhook_secret}\n"
             "- Events: push"

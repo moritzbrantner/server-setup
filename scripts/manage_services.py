@@ -11,13 +11,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from registry_contract import DEFAULT_REGISTRY_PATH
 from site_cleanup_common import RESET_UNITS, load_managed_sites
 
 
 SYSTEM_SERVICE_METADATA: dict[str, tuple[str, str]] = {
-    "site-discovery-deploy.service": ("automation", "automation"),
-    "site-discovery-deploy.timer": ("automation", "automation"),
-    "site-apps-watcher.service": ("automation", "automation"),
     "site-webhook-receiver.service": ("automation", "automation"),
     "server-setup-status-webapp.service": ("support", "status-webapp"),
     "server-setup-example-apps.service": ("support", "example-apps"),
@@ -63,7 +61,7 @@ def parse_args() -> argparse.Namespace:
         choices=("status", "list", "start", "stop", "restart"),
         help="Show service inventory or run a systemctl action against the selected managed units.",
     )
-    parser.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "deploy/sites.json"))
+    parser.add_argument("--config", default=str(DEFAULT_REGISTRY_PATH))
     parser.add_argument(
         "--app",
         action="append",

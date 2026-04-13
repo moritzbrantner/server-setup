@@ -6,9 +6,8 @@ source "$SCRIPT_DIR/lib/test-helpers.sh"
 
 test_shutdown_websites_dry_run_lists_managed_units() {
   local output
-  output="$(python3 "$ROOT_DIR/scripts/shutdown_websites.py" --config "$ROOT_DIR/deploy/sites.json" --dry-run)"
+  output="$(python3 "$ROOT_DIR/scripts/shutdown_websites.py" --config "$ROOT_DIR/deploy/registry.json" --dry-run)"
 
-  grep -Fq 'systemctl stop site-apps-watcher.service' <<<"$output"
   grep -Fq 'systemctl stop site-webhook-receiver.service' <<<"$output"
   grep -Fq 'systemctl stop server-setup-status-webapp.service' <<<"$output"
   grep -Fq 'systemctl stop tlm-deutschland.service' <<<"$output"
@@ -17,10 +16,11 @@ test_shutdown_websites_dry_run_lists_managed_units() {
 
 test_reset_server_setup_dry_run_lists_cleanup_targets() {
   local output
-  output="$(python3 "$ROOT_DIR/scripts/reset_server_setup.py" --config "$ROOT_DIR/deploy/sites.json" --dry-run)"
+  output="$(python3 "$ROOT_DIR/scripts/reset_server_setup.py" --config "$ROOT_DIR/deploy/registry.json" --dry-run)"
 
   grep -Fq 'systemctl disable tlm-deutschland.service' <<<"$output"
   grep -Fq 'remove /etc/systemd/system/tlm-deutschland.service' <<<"$output"
+  grep -Fq 'remove /home/moenarch/moritzbrantner/server-setup/deploy/registry.json' <<<"$output"
   grep -Fq 'remove /etc/default/site-automation' <<<"$output"
   grep -Fq 'remove /etc/default/server-setup-status-webapp' <<<"$output"
   grep -Fq 'remove /etc/nginx/sites-available/tlm-deutschland.conf' <<<"$output"

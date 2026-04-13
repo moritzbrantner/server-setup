@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from registry_contract import DEFAULT_REGISTRY_PATH
 from site_cleanup_common import RESET_UNITS, ManagedSite, load_managed_sites
 
 
@@ -16,7 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Disable repo-managed services and remove generated config/state for a clean reset."
     )
-    parser.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "deploy/sites.json"))
+    parser.add_argument("--config", default=str(DEFAULT_REGISTRY_PATH))
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions without executing them.")
     parser.add_argument(
         "--yes",
@@ -57,7 +58,7 @@ def log_dir() -> Path:
 
 
 def lock_file() -> Path:
-    return Path(os.environ.get("LOCK_FILE", "/var/lock/site-discovery-deploy.lock"))
+    return Path(os.environ.get("LOCK_FILE", "/var/lock/site-webhook-receiver.lock"))
 
 
 def lock_dir() -> Path:
@@ -155,7 +156,8 @@ def run_nginx_follow_up(*, dry_run: bool, nginx_changed: bool, stop_nginx: bool)
 
 def main() -> None:
     args = parse_args()
-    sites = load_managed_sites(Path(args.config))
+    config_path = Path(args.config)
+    sites = load_managed_sites(config_path)
     runtime_units = list(dict.fromkeys(site.runtime_service for site in sites if site.runtime_service))
 
     if not args.dry_run:
@@ -178,6 +180,7 @@ def main() -> None:
         remove_site_state(site, dry_run=args.dry_run)
 
     remove_installed_units(sites, dry_run=args.dry_run)
+    remove_path(config_path, dry_run=args.dry_run)
     remove_path(automation_env_file(), dry_run=args.dry_run)
     remove_path(status_webapp_env_file(), dry_run=args.dry_run)
     remove_path(lock_file(), dry_run=args.dry_run)

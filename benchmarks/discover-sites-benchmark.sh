@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-DISCOVER_SCRIPT="$ROOT_DIR/scripts/discover-sites.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "Missing required command: jq" >&2
@@ -49,16 +48,16 @@ JSON
 
 if command -v hyperfine >/dev/null 2>&1; then
   hyperfine --warmup 2 \
-    "$DISCOVER_SCRIPT --base-glob '$tmp/apps/*' --output '$tmp/sites.json'"
+    "python3 -c \"import sys; sys.path.insert(0, '$ROOT_DIR/scripts'); from server_conf_contract import normalize_server_conf; normalize_server_conf('$tmp/apps/server-setup-bench')\""
 else
   echo "hyperfine not found; falling back to 5 timed runs."
   for i in 1 2 3 4 5; do
     if [[ -x /usr/bin/time ]]; then
       /usr/bin/time -f "run $i: %E real %M KB" \
-        "$DISCOVER_SCRIPT" --base-glob "$tmp/apps/*" --output "$tmp/sites.json" >/dev/null
+        python3 -c "import sys; sys.path.insert(0, '$ROOT_DIR/scripts'); from server_conf_contract import normalize_server_conf; normalize_server_conf('$tmp/apps/server-setup-bench')" >/dev/null
     else
       start="$(date +%s%3N)"
-      "$DISCOVER_SCRIPT" --base-glob "$tmp/apps/*" --output "$tmp/sites.json" >/dev/null
+      python3 -c "import sys; sys.path.insert(0, '$ROOT_DIR/scripts'); from server_conf_contract import normalize_server_conf; normalize_server_conf('$tmp/apps/server-setup-bench')" >/dev/null
       end="$(date +%s%3N)"
       echo "run $i: $((end - start))ms real"
     fi

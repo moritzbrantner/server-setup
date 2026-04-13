@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import argparse
 
+from registry_contract import DEFAULT_REGISTRY_PATH
 from simple_setup_common import repo_root, run_checked
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stop the stack, or purge generated config as well.")
-    parser.add_argument("--config", default="deploy/sites.json")
+    parser.add_argument("--config", default=str(DEFAULT_REGISTRY_PATH))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--purge", action="store_true")
     return parser.parse_args()

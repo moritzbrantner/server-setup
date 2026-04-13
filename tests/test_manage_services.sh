@@ -27,19 +27,11 @@ SubState=running
 UnitFileState=enabled
 EOF
         ;;
-      site-apps-watcher.service)
+      site-webhook-receiver.service)
         cat <<'EOF'
 LoadState=loaded
 ActiveState=active
 SubState=running
-UnitFileState=enabled
-EOF
-        ;;
-      site-discovery-deploy.timer)
-        cat <<'EOF'
-LoadState=loaded
-ActiveState=active
-SubState=waiting
 UnitFileState=enabled
 EOF
         ;;
@@ -83,11 +75,11 @@ test_manage_services_lists_unit_status_and_app_mapping() {
   local output
   output="$(
     PATH="$tmp/bin:$PATH" \
-      python3 "$ROOT_DIR/scripts/manage_services.py" --config "$ROOT_DIR/deploy/sites.json"
+      python3 "$ROOT_DIR/scripts/manage_services.py" --config "$ROOT_DIR/deploy/registry.json"
   )"
 
   grep -Fq 'SERVICE' <<<"$output"
-  grep -Fq 'site-apps-watcher.service' <<<"$output"
+  grep -Fq 'site-webhook-receiver.service' <<<"$output"
   grep -Fq 'tlm-deutschland.service' <<<"$output"
   grep -Fq 'automation' <<<"$output"
   grep -Fq 'tlm-deutschland' <<<"$output"
@@ -103,11 +95,11 @@ test_manage_services_filters_and_runs_dry_run_action() {
   local output
   output="$(
     PATH="$tmp/bin:$PATH" \
-      python3 "$ROOT_DIR/scripts/manage_services.py" restart --app tlm-deutschland --dry-run --config "$ROOT_DIR/deploy/sites.json"
+      python3 "$ROOT_DIR/scripts/manage_services.py" restart --app tlm-deutschland --dry-run --config "$ROOT_DIR/deploy/registry.json"
   )"
 
   grep -Fq '+ systemctl restart tlm-deutschland.service' <<<"$output"
-  if grep -Fq 'site-apps-watcher.service' <<<"$output"; then
+  if grep -Fq 'site-webhook-receiver.service' <<<"$output"; then
     echo "Unexpected extra service action in output:" >&2
     echo "$output" >&2
     exit 1

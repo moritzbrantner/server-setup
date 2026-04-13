@@ -57,13 +57,7 @@ def setup_automation_units(root_dir: Path, *, start_webhook: bool) -> Path:
     if not systemd_dir.is_dir():
         raise SystemExit(f"Automation units directory not found: {systemd_dir}")
 
-    for name in (
-        "site-discovery-deploy.service",
-        "site-apps-watcher.service",
-        "site-webhook-receiver.service",
-        "site-discovery-deploy.timer",
-    ):
-        shutil.copyfile(systemd_dir / name, Path("/etc/systemd/system") / name)
+    shutil.copyfile(systemd_dir / "site-webhook-receiver.service", Path("/etc/systemd/system") / "site-webhook-receiver.service")
 
     if not env_file.exists():
         template = systemd_dir / "site-automation.env.example"
@@ -72,13 +66,11 @@ def setup_automation_units(root_dir: Path, *, start_webhook: bool) -> Path:
             env_file,
             {
                 "REPO_ROOT": str(root_dir),
-                "CONFIG_PATH": str(root_dir / "deploy/sites.json"),
+                "REGISTRY_PATH": str(root_dir / "deploy/registry.json"),
             },
         )
 
     run_checked(["systemctl", "daemon-reload"])
-    run_checked(["systemctl", "enable", "--now", "site-discovery-deploy.timer"])
-    run_checked(["systemctl", "enable", "--now", "site-apps-watcher.service"])
     if start_webhook:
         run_checked(["systemctl", "enable", "--now", "site-webhook-receiver.service"])
     else:

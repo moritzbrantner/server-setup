@@ -8,7 +8,6 @@ from pathlib import Path
 def main() -> None:
     root_dir = Path(__file__).resolve().parent.parent
     subprocess.run(["bash", str(root_dir / "tests/run-tests.sh")], check=True, cwd=root_dir)
-    subprocess.run(["bash", str(root_dir / "benchmarks/discover-sites-benchmark.sh")], check=True, cwd=root_dir)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,44 @@
+[
+  {
+    "name": "tlm-deutschland",
+    "repo_url": "https://github.com/moritzbrantner/tlm-deutschland.git",
+    "branch": "main",
+    "checkout_path": "/root/apps/tlm-deutschland",
+    "server_conf_path": "/root/apps/tlm-deutschland/server.conf",
+    "service_name": "tlm-deutschland.service",
+    "domain": "tlm-deutschland.de",
+    "webhook_repo": "moritzbrantner/tlm-deutschland",
+    "managed_by": "deploy-repo",
+    "deploy_config": {
+      "name": "tlm-deutschland",
+      "domain": "tlm-deutschland.de",
+      "build_output": ".",
+      "web_root": null,
+      "deploy_hooks": {
+        "pre_deploy": null,
+        "build": "bun install --frozen-lockfile && bun run build",
+        "post_deploy": null
+      },
+      "runtime": {
+        "mode": "service",
+        "working_dir": ".",
+        "user": "root",
+        "health_endpoint": "/",
+        "health_retries": 20,
+        "health_interval_seconds": 2,
+        "command": "PORT=3001 bun run start",
+        "port": 3001
+      },
+      "service": {
+        "name": "tlm-deutschland.service"
+      },
+      "nginx": {
+        "www_redirect": false,
+        "tls_hostnames": [
+          "tlm-deutschland.de"
+        ]
+      },
+      "source_server_conf": "/root/apps/tlm-deutschland/server.conf"
+    }
+  }
+]

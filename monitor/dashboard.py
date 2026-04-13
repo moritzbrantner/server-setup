@@ -25,7 +25,7 @@ DB_LOCK = threading.Lock()
 
 
 def default_config_path() -> Path:
-    deploy_path = Path("deploy/sites.json")
+    deploy_path = Path("deploy/registry.json")
     if deploy_path.exists():
         return deploy_path
     return Path("monitor/websites.json")
@@ -57,9 +57,14 @@ def load_sites(config_path: Path, state_dir: Path | None = None):
         if not name:
             raise ValueError(f"Site at index {idx} must include name.")
 
+        deploy_config = site.get("deploy_config") or {}
         url = site.get("url") or site.get("site_url")
+        if not url:
+            url = deploy_config.get("site_url")
         if not url and site.get("domain"):
             url = f"https://{site['domain']}"
+        if not url and deploy_config.get("domain"):
+            url = f"https://{deploy_config['domain']}"
         if not url:
             raise ValueError(f"Site at index {idx} must include url/site_url/domain.")
 
@@ -71,7 +76,7 @@ def load_sites(config_path: Path, state_dir: Path | None = None):
                 "url": url,
                 "timeout": timeout,
                 "deploy": deploy_state,
-                "runtime_mode": ((site.get("runtime") or {}).get("mode") or "static"),
+                "runtime_mode": (((deploy_config.get("runtime") or {}).get("mode")) or ((site.get("runtime") or {}).get("mode")) or "static"),
             }
         )
 

@@ -9,7 +9,6 @@ source "$SCRIPT_DIR/lib/test-helpers.sh"
 declare -i pass_count="${pass_count:-0}"
 
 SEED_SCRIPT="$ROOT_DIR/scripts/seed-example-repositories.sh"
-DISCOVER_SCRIPT="$ROOT_DIR/scripts/discover-sites.sh"
 
 test_seed_examples_creates_expected_git_repositories() {
   local tmp
@@ -43,24 +42,21 @@ test_seed_examples_skips_existing_repositories_without_force() {
   rm -rf "$tmp"
 }
 
-test_discover_seeded_examples_normalizes_expected_sites() {
+test_seed_examples_include_server_conf_contract() {
   local tmp
   tmp="$(make_temp_dir)"
 
   "$SEED_SCRIPT" --source-dir "$ROOT_DIR/examples/repositories" --target-dir "$tmp/apps" >/dev/null
-  "$DISCOVER_SCRIPT" --base-glob "$tmp/apps/*" --output "$tmp/sites.json"
 
-  assert_eq "complex-site rest-api simple-site" "$(jq -r 'map(.name) | sort | join(" ")' "$tmp/sites.json")"
-  assert_eq "api.localhost app.localhost simple.localhost" "$(jq -r 'map(.domain) | sort | join(" ")' "$tmp/sites.json")"
-  assert_eq "service" "$(jq -r '.[] | select(.name == "complex-site") | .runtime.mode' "$tmp/sites.json")"
-  assert_eq "service" "$(jq -r '.[] | select(.name == "rest-api") | .runtime.mode' "$tmp/sites.json")"
-  assert_eq "static" "$(jq -r '.[] | select(.name == "simple-site") | .runtime.mode' "$tmp/sites.json")"
+  jq -e '.runtime.mode == "service"' "$tmp/apps/complex-site/server.conf" >/dev/null
+  jq -e '.runtime.mode == "service"' "$tmp/apps/rest-api/server.conf" >/dev/null
+  jq -e '.build_output == "public"' "$tmp/apps/simple-site/server.conf" >/dev/null
 
   rm -rf "$tmp"
 }
 
 run_test "seed-example-repositories creates three standalone git repos" test_seed_examples_creates_expected_git_repositories
 run_test "seed-example-repositories skips existing repos without --force" test_seed_examples_skips_existing_repositories_without_force
-run_test "discover-sites normalizes the seeded sandbox examples" test_discover_seeded_examples_normalizes_expected_sites
+run_test "seed-example-repositories includes the nested server.conf contract" test_seed_examples_include_server_conf_contract
 
 echo "All tests passed: $pass_count"

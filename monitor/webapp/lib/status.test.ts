@@ -174,13 +174,9 @@ test("dashboard snapshot returns setup categories and site alerts", async () => 
     `#!/usr/bin/env bash
 unit="$2"
 case "$unit" in
-  nginx|docker|server-setup-status-webapp.service|site-webhook-receiver.service|site-discovery-deploy.timer|certbot.timer|fail2ban|unattended-upgrades)
+  nginx|docker|server-setup-status-webapp.service|site-webhook-receiver.service|certbot.timer|fail2ban|unattended-upgrades)
     printf 'active\\n'
     exit 0
-    ;;
-  site-apps-watcher.service)
-    printf 'inactive\\n'
-    exit 3
     ;;
   api.service)
     printf 'failed\\n'

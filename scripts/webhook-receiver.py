@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GitHub webhook receiver that triggers the discovery/deploy service."""
+"""GitHub webhook receiver that redeploys registered repositories."""
 
 from __future__ import annotations
 
@@ -7,10 +7,12 @@ import hashlib
 import hmac
 import json
 import os
-import subprocess
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+
+from deploy_engine import deploy_registry_entry
+from registry_contract import DEFAULT_REGISTRY_PATH, find_registry_entry_by_push
 
 WEBHOOK_HOST = os.environ.get("WEBHOOK_HOST", "0.0.0.0")
 WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "9001"))
@@ -23,7 +25,8 @@ WEBHOOK_ALLOWED_REPOS = {
 WEBHOOK_ALLOWED_BRANCHES = {
     item.strip() for item in os.environ.get("WEBHOOK_ALLOWED_BRANCHES", "").split(",") if item.strip()
 }
-RUNNER_SERVICE = os.environ.get("RUNNER_SERVICE", "site-discovery-deploy.service")
+REGISTRY_PATH = Path(os.environ.get("REGISTRY_PATH", str(DEFAULT_REGISTRY_PATH)))
+DEFAULT_TLS_EMAIL = os.environ.get("DEFAULT_TLS_EMAIL", "").strip()
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/var/log/server-setup"))
 LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", "14"))
 
@@ -62,16 +65,20 @@ def valid_signature(payload: bytes, signature: str) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
-def should_trigger_deploy(payload: dict) -> bool:
+def matching_registry_entry(payload: dict) -> dict | None:
     repo = ((payload.get("repository") or {}).get("full_name") or "").strip()
     ref = str(payload.get("ref") or "")
     branch = ref.removeprefix("refs/heads/")
 
     if WEBHOOK_ALLOWED_REPOS and repo not in WEBHOOK_ALLOWED_REPOS:
-        return False
+        return None
     if WEBHOOK_ALLOWED_BRANCHES and branch not in WEBHOOK_ALLOWED_BRANCHES:
-        return False
-    return True
+        return None
+    return find_registry_entry_by_push(repo, branch, REGISTRY_PATH)
+
+
+def should_trigger_deploy(payload: dict) -> bool:
+    return matching_registry_entry(payload) is not None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -112,15 +119,36 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"invalid json")
             return
 
-        if not should_trigger_deploy(body):
+        entry = matching_registry_entry(body)
+        if entry is None:
             log_event("webhook", "ignored", "push did not match repo/branch filters")
             self.send_response(202)
             self.end_headers()
             self.wfile.write(b"ignored push")
             return
 
-        subprocess.run(["systemctl", "start", RUNNER_SERVICE], check=False)
-        log_event("webhook", "accepted", "deploy triggered")
+        if not DEFAULT_TLS_EMAIL:
+            log_event("webhook", "rejected", "DEFAULT_TLS_EMAIL is not configured", level="error")
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"missing tls email")
+            return
+
+        try:
+            result = deploy_registry_entry(
+                entry,
+                tls_email=DEFAULT_TLS_EMAIL,
+                configure_webhook=False,
+                webhook_secret=WEBHOOK_SECRET,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log_event("webhook", "failed", str(exc), level="error")
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"deploy failed")
+            return
+
+        log_event("webhook", "accepted", f"deployed {result.name}")
         self.send_response(202)
         self.end_headers()
         self.wfile.write(b"deploy triggered")

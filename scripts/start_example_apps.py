@@ -9,7 +9,8 @@ from pathlib import Path
 
 def main() -> None:
     root_dir = Path("/opt/server-setup")
-    config_path = os.environ.get("EXAMPLE_APPS_CONFIG_PATH", str(root_dir / "deploy/sites.json"))
+    apps_dir = Path(os.environ.get("EXAMPLE_APPS_DIR", "/srv/apps"))
+    tls_email = os.environ.get("DEFAULT_TLS_EMAIL", "ops@example.com")
     postgres_host = os.environ.get("POSTGRES_HOST", "test-db")
     postgres_port = os.environ.get("POSTGRES_PORT", "5432")
     postgres_db = os.environ.get("POSTGRES_DB", "server_setup")
@@ -29,11 +30,22 @@ def main() -> None:
             break
         time.sleep(2)
 
-    subprocess.run(
-        ["bash", str(root_dir / "scripts/sync-github-sites.sh"), "--config", config_path],
-        check=True,
-        cwd=root_dir,
-    )
+    for repo_dir in sorted(path for path in apps_dir.iterdir() if (path / "server.conf").is_file()):
+        subprocess.run(
+            [
+                "bash",
+                str(root_dir / "scripts/deploy-repo.sh"),
+                "--repo-url",
+                str(repo_dir),
+                "--dest",
+                str(repo_dir),
+                "--email",
+                tls_email,
+                "--skip-github-hook",
+            ],
+            check=True,
+            cwd=root_dir,
+        )
 
 
 if __name__ == "__main__":

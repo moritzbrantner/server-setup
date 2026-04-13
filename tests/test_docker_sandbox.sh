@@ -91,11 +91,11 @@ test_docker_sandbox_deploys_tlm_deutschland() {
   docker exec "$CONTAINER_NAME" bash -lc 'systemctl start nginx'
   docker exec "$CONTAINER_NAME" bash -lc '
     cd /opt/server-setup
-    ./scripts/sync-github-sites.sh --config tests/fixtures/tlm-deutschland-sites.json --site tlm-deutschland
+    ./scripts/prepare-server.sh --email admin@example.com --skip-docker
+    ./scripts/deploy-repo.sh --repo-url https://github.com/moritzbrantner/tlm-deutschland.git --dest /root/apps/tlm-deutschland --email admin@example.com --skip-github-hook
   '
 
-  docker exec "$CONTAINER_NAME" bash -lc 'test -L /root/apps/tlm-deutschland/current'
-  docker exec "$CONTAINER_NAME" bash -lc 'test -f /root/apps/tlm-deutschland/current/.next/BUILD_ID'
+  docker exec "$CONTAINER_NAME" bash -lc 'test -f /root/apps/tlm-deutschland/.next/BUILD_ID'
   docker exec "$CONTAINER_NAME" bash -lc 'systemctl is-active --quiet tlm-deutschland.service'
   docker exec "$CONTAINER_NAME" bash -lc "curl -fsS -H 'Host: tlm-deutschland.de' http://127.0.0.1/ >/dev/null"
 }

@@ -1,52 +1,63 @@
 # server-setup
 
-This repo now has five user-facing scripts:
+`server-setup` now has one canonical setup flow for served repositories:
 
-0. Prepare a fresh server once
-1. Deploy a repository from GitHub and wire up redeploy hooks
-2. Put a running service behind a domain and Let's Encrypt
-3. Shut the stack down again
-4. Inspect or manage the generated systemd services
+1. Prepare the server once.
+2. Deploy each repository with `deploy-repo`.
 
-## 0. Prepare the server
+Repositories that should be served must contain a valid root `server.conf`. Server-local state is generated into `deploy/registry.json`.
+
+## Prepare the server
 
 ```bash
-sudo ./scripts/prepare-server.sh
+sudo ./scripts/prepare-server.sh \
+  --email ops@example.com \
+  --skip-docker \
+  --with-status-webapp
 ```
 
 What it does:
-- installs the baseline packages and developer tools
-- applies SSH/UFW/fail2ban hardening
-- installs the deploy watcher, webhook receiver, and fallback timer
+- installs baseline packages and developer tools
+- optionally applies SSH/UFW/fail2ban hardening
+- installs the webhook receiver service
+- stores `DEFAULT_TLS_EMAIL` in `/etc/default/site-automation`
+- optionally installs the status webapp
+
+`--email` is required the first time you run it. Later runs can reuse the stored default.
+
+## Deploy a repository
+
+```bash
+sudo ./scripts/deploy-repo.sh \
+  --repo-url git@github.com:your-org/your-app.git
+```
 
 Optional:
 
 ```bash
-sudo ./scripts/prepare-server.sh --skip-docker --with-status-webapp
-```
-
-## 1. Deploy a repository
-
-```bash
 sudo ./scripts/deploy-repo.sh \
   --repo-url git@github.com:your-org/your-app.git \
-  --dest /srv/apps/your-app
+  --dest /srv/apps/your-app \
+  --branch main \
+  --email ops@example.com \
+  --skip-github-hook
 ```
 
 What it does:
-- clones or updates the repository
-- reads `server.conf` from the repo root
-- registers the app in `deploy/sites.json`
-- creates or updates the systemd service and nginx config
-- deploys the app
-- configures the local GitHub webhook receiver
-- tries to create the GitHub webhook automatically when `gh auth login` is already set up
+- clones or updates the checkout under `/srv/apps/<repo-name>` by default
+- validates `server.conf`
+- upserts `deploy/registry.json`
+- runs the repo deploy hooks
+- creates or updates the app systemd service
+- writes or updates the nginx site
+- verifies DNS and requests/renews Let’s Encrypt
+- configures the webhook receiver and, when possible, the GitHub webhook
 
-If automatic GitHub webhook creation is not possible, the script prints the exact `Payload URL` and `Secret` to use in GitHub.
+If automatic GitHub webhook creation is not possible, the script prints the exact payload URL and secret to configure manually.
 
-`deploy-repo.sh` expects the repository to contain a `server.conf`. Minimal examples:
+## `server.conf`
 
-Static site:
+Minimal static site:
 
 ```json
 {
@@ -56,68 +67,39 @@ Static site:
 }
 ```
 
-Service:
+Minimal long-running service:
 
 ```json
 {
   "name": "api",
   "domain": "api.example.com",
-  "build": "npm ci && npm run build",
-  "command": "PORT=4001 npm run start",
-  "port": 4001,
-  "health_endpoint": "/health"
+  "build_output": ".",
+  "deploy_hooks": {
+    "build": "npm ci && npm run build"
+  },
+  "runtime": {
+    "mode": "service",
+    "command": "PORT=4001 npm run start",
+    "port": 4001
+  }
 }
 ```
 
-## 2. Put a running service behind a domain and TLS
+Supported top-level keys:
+- `name`
+- `domain`
+- `build_output`
+- `web_root`
+- `deploy_hooks`
+- `runtime`
+- `service`
+- `nginx`
 
-For an app already listening on a local port:
+Legacy top-level shorthand like `build`, `command`, `port`, `www_redirect`, and infrastructure keys like `repo`, `branch`, or `workdir` are rejected.
 
-```bash
-sudo ./scripts/setup-domain.sh \
-  --domain app.example.com \
-  --port 4001 \
-  --email ops@example.com
-```
+## Operate the stack
 
-For a static directory:
-
-```bash
-sudo ./scripts/setup-domain.sh \
-  --domain www.example.com \
-  --root /var/www/example.com/public \
-  --email ops@example.com \
-  --www
-```
-
-What it does:
-- writes the nginx site
-- checks that DNS for the domain points at this server
-- requests and installs the Let's Encrypt certificate
-
-## 3. Shut things down
-
-Stop the managed apps, nginx, and the deploy automation:
-
-```bash
-sudo ./scripts/shutdown-server.sh
-```
-
-Preview only:
-
-```bash
-sudo ./scripts/shutdown-server.sh --dry-run
-```
-
-Also delete generated units, nginx configs, state files, and env files:
-
-```bash
-sudo ./scripts/shutdown-server.sh --purge
-```
-
-## 4. Inspect or manage services
-
-Show all managed units, whether they currently exist, whether they are active, and which app owns them:
+Show managed services:
 
 ```bash
 ./scripts/manage-services.sh
@@ -129,15 +111,18 @@ Restart one app service:
 sudo ./scripts/manage-services.sh restart --app your-app
 ```
 
-Filter to a specific unit:
+Stop managed services:
 
 ```bash
-./scripts/manage-services.sh --service site-apps-watcher.service
+sudo ./scripts/shutdown-server.sh
 ```
 
-## Notes
+Preview purge:
 
-- Run step 0 once per server.
-- Run step 1 for repo-managed apps that ship a `server.conf`.
-- Run step 2 for anything already running locally that just needs nginx and TLS.
-- Advanced internals and testing notes remain in [`INSTALLING-AND-TESTING.md`](INSTALLING-AND-TESTING.md).
+```bash
+sudo ./scripts/shutdown-server.sh --purge --dry-run
+```
+
+## Development
+
+Development and testing notes live in [`INSTALLING-AND-TESTING.md`](INSTALLING-AND-TESTING.md).
