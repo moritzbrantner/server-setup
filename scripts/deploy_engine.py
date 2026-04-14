@@ -146,6 +146,75 @@ def command_env() -> dict[str, str]:
     return env
 
 
+def _command_mentions_install(cmd: str | None) -> bool:
+    if not cmd:
+        return False
+    lowered = cmd.lower()
+    install_markers = (
+        "bun install",
+        "npm ci",
+        "npm install",
+        "pnpm install",
+        "yarn install",
+    )
+    return any(marker in lowered for marker in install_markers)
+
+
+def _command_needs_node_modules(cmd: str | None) -> bool:
+    if not cmd:
+        return False
+    lowered = cmd.lower()
+    needs_markers = (
+        "bun run",
+        "npm run",
+        "npx ",
+        "pnpm ",
+        "yarn ",
+        " next ",
+        "next build",
+        "next start",
+    )
+    return any(marker in lowered for marker in needs_markers)
+
+
+def _detect_install_command(checkout_path: Path, hint_cmd: str | None) -> list[str] | None:
+    if (checkout_path / "bun.lock").exists() or (checkout_path / "bun.lockb").exists():
+        return ["bun", "install"]
+    if (checkout_path / "package-lock.json").exists():
+        return ["npm", "ci"]
+    if (checkout_path / "pnpm-lock.yaml").exists():
+        return ["pnpm", "install", "--frozen-lockfile"]
+    if (checkout_path / "yarn.lock").exists():
+        return ["yarn", "install", "--frozen-lockfile"]
+
+    lowered = (hint_cmd or "").lower()
+    if "bun" in lowered:
+        return ["bun", "install"]
+    if "pnpm" in lowered:
+        return ["pnpm", "install"]
+    if "yarn" in lowered:
+        return ["yarn", "install"]
+    if "npm" in lowered or "next " in lowered:
+        return ["npm", "install"]
+    return None
+
+
+def maybe_install_node_dependencies(checkout_path: Path, *commands: str | None) -> None:
+    if not (checkout_path / "package.json").is_file():
+        return
+    if (checkout_path / "node_modules").is_dir():
+        return
+    if any(_command_mentions_install(cmd) for cmd in commands):
+        return
+    hint_cmd = next((cmd for cmd in commands if _command_needs_node_modules(cmd)), None)
+    if not hint_cmd:
+        return
+    install_cmd = _detect_install_command(checkout_path, hint_cmd)
+    if not install_cmd:
+        return
+    run_checked(install_cmd, cwd=checkout_path, env=command_env())
+
+
 def write_if_changed(path: Path, content: str) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.read_text(encoding="utf-8") == content:
@@ -466,6 +535,11 @@ def deploy_registry_entry(
         ctx.log_event(site_name, "deploy", "running", str(checkout_path))
 
         run_optional(deploy_config["deploy_hooks"].get("pre_deploy"), cwd=checkout_path)
+        maybe_install_node_dependencies(
+            checkout_path,
+            deploy_config["deploy_hooks"].get("build"),
+            deploy_config["runtime"].get("command"),
+        )
         run_optional(deploy_config["deploy_hooks"].get("build"), cwd=checkout_path)
         ensure_runtime_service(ctx, site_name, deploy_config, checkout_path)
         wait_for_service_health(deploy_config)

@@ -167,3 +167,29 @@ class DeployEngineTests(unittest.TestCase):
         self.assertTrue(kwargs["capture"])
         self.assertEqual(kwargs["env"]["BUN_INSTALL"], "/root/.bun")
         self.assertTrue(kwargs["env"]["PATH"].startswith("/root/.bun/bin:"))
+
+    def test_maybe_install_node_dependencies_runs_bun_install_for_bun_builds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = pathlib.Path(tmp)
+            (checkout / "package.json").write_text("{}", encoding="utf-8")
+            (checkout / "bun.lock").write_text("", encoding="utf-8")
+
+            with patch.dict(os.environ, {"HOME": "/root", "PATH": "/usr/bin"}, clear=False):
+                with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")) as run_checked_mock:
+                    self.module.maybe_install_node_dependencies(checkout, "bun run build", "bun run start")
+
+        args, kwargs = run_checked_mock.call_args
+        self.assertEqual(args[0], ["bun", "install"])
+        self.assertEqual(kwargs["cwd"], checkout)
+        self.assertEqual(kwargs["env"]["BUN_INSTALL"], "/root/.bun")
+
+    def test_maybe_install_node_dependencies_skips_when_build_hook_installs_already(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = pathlib.Path(tmp)
+            (checkout / "package.json").write_text("{}", encoding="utf-8")
+            (checkout / "bun.lock").write_text("", encoding="utf-8")
+
+            with patch.object(self.module, "run_checked") as run_checked_mock:
+                self.module.maybe_install_node_dependencies(checkout, "bun install && bun run build", "bun run start")
+
+        run_checked_mock.assert_not_called()

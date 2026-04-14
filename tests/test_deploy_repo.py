@@ -55,6 +55,16 @@ class DeployRepoTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, "Run deploy_repo.py in an interactive terminal"):
                     self.module.ensure_server_conf(tmp)
 
+    def test_prepare_repository_config_runs_server_conf_and_dotfile_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(self.module, "ensure_server_conf") as server_conf_mock:
+                with patch.object(self.module, "ensure_example_dotfiles") as dotfiles_mock:
+                    with patch.object(self.module.sys, "stdin", types.SimpleNamespace(isatty=lambda: True)):
+                        self.module.prepare_repository_config(tmp)
+
+        server_conf_mock.assert_called_once_with(tmp)
+        dotfiles_mock.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

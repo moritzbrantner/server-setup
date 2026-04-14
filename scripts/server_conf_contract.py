@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Callable
 
+from repo_config_bootstrap import suggested_runtime_env_file
+
 
 class ValidationError(ValueError):
     """Raised when a repo-owned server.conf is invalid."""
@@ -120,6 +122,19 @@ def _clean_optional(value: str | None) -> str | None:
     return cleaned or None
 
 
+def _default_build_command(checkout: Path) -> str:
+    if (checkout / "package.json").is_file():
+        if (checkout / "bun.lock").exists() or (checkout / "bun.lockb").exists():
+            return "bun run build"
+        if (checkout / "package-lock.json").exists():
+            return "npm run build"
+        if (checkout / "pnpm-lock.yaml").exists():
+            return "pnpm run build"
+        if (checkout / "yarn.lock").exists():
+            return "yarn build"
+    return ""
+
+
 def create_server_conf_interactively(
     checkout_path: str | Path,
     *,
@@ -151,7 +166,7 @@ def create_server_conf_interactively(
         default=build_output_default,
         required=True,
     ).strip()
-    build_command = _clean_optional(prompt_text_fn("Build command", default=""))
+    build_command = _clean_optional(prompt_text_fn("Build command", default=_default_build_command(checkout)))
     enable_www_redirect = prompt_bool_fn("Redirect www to the primary domain", default=False)
 
     config: dict[str, object] = {
@@ -171,7 +186,9 @@ def create_server_conf_interactively(
         runtime_command = prompt_text_fn("Runtime command", required=True).strip()
         runtime_port = _prompt_port(prompt_text_fn, print_fn, default=3000)
         health_endpoint = _clean_optional(prompt_text_fn("Health endpoint", default="/health"))
-        env_file = _clean_optional(prompt_text_fn("Environment file path", default=""))
+        env_file = _clean_optional(
+            prompt_text_fn("Environment file path", default=suggested_runtime_env_file(checkout))
+        )
 
         runtime = {
             "mode": "service",

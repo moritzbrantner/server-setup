@@ -4,13 +4,17 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import sys
 import tempfile
 import unittest
 from collections import deque
 
+ROOT_DIR = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR / "scripts"))
+
 
 def load_module():
-    path = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "server_conf_contract.py"
+    path = ROOT_DIR / "scripts" / "server_conf_contract.py"
     spec = importlib.util.spec_from_file_location("server_conf_contract", path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -157,6 +161,7 @@ class ServerConfContractTests(unittest.TestCase):
 
     def test_create_server_conf_interactively_generates_service_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            (pathlib.Path(tmp) / ".env.example").write_text("TOKEN=\n", encoding="utf-8")
             conf_path = self.module.create_server_conf_interactively(
                 tmp,
                 prompt_text_fn=self._prompt_text(
@@ -169,7 +174,7 @@ class ServerConfContractTests(unittest.TestCase):
                         "PORT=4100 npm run start",
                         "4100",
                         "/healthz",
-                        "/etc/default/api",
+                        "__DEFAULT__",
                     ]
                 ),
                 prompt_bool_fn=self._prompt_bool([False]),
@@ -182,7 +187,7 @@ class ServerConfContractTests(unittest.TestCase):
         self.assertEqual(conf["runtime"]["command"], "PORT=4100 npm run start")
         self.assertEqual(conf["runtime"]["port"], 4100)
         self.assertEqual(conf["runtime"]["health_endpoint"], "/healthz")
-        self.assertEqual(conf["runtime"]["env_file"], "/etc/default/api")
+        self.assertEqual(conf["runtime"]["env_file"], str((pathlib.Path(tmp) / ".env").resolve()))
 
 
 if __name__ == "__main__":

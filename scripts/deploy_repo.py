@@ -8,6 +8,7 @@ from pathlib import Path
 
 from deploy_engine import build_registry_entry, clone_or_update_checkout, deploy_registry_entry, repo_basename, update_automation_env
 from interactive_cli import prompt_bool, prompt_text
+from repo_config_bootstrap import ensure_example_dotfiles
 from registry_contract import DEFAULT_REGISTRY_PATH
 from server_conf_contract import create_server_conf_interactively
 from simple_setup_common import AUTOMATION_ENV_FILE, generate_webhook_secret, load_env_file, repo_root, require_root, run_checked, setup_automation_units
@@ -41,6 +42,16 @@ def ensure_server_conf(checkout_path: str | Path) -> Path:
     )
 
 
+def prepare_repository_config(checkout_path: str | Path) -> None:
+    ensure_server_conf(checkout_path)
+    ensure_example_dotfiles(
+        checkout_path,
+        prompt_text_fn=prompt_text,
+        is_interactive=sys.stdin.isatty(),
+        print_fn=print,
+    )
+
+
 def main() -> None:
     args = parse_args()
     require_root()
@@ -56,14 +67,15 @@ def main() -> None:
         )
     webhook_secret = env_file.get("WEBHOOK_SECRET", "").strip() or generate_webhook_secret()
 
-    print("[1/5] Installing deploy automation services")
+    print("[1/6] Installing deploy automation services")
     setup_automation_units(root, start_webhook=False)
 
-    print("[2/5] Cloning or updating repository checkout")
+    print("[2/6] Cloning or updating repository checkout")
     branch = clone_or_update_checkout(args.repo_url, dest, args.branch)
-    ensure_server_conf(dest)
+    print("[3/6] Preparing repository config files")
+    prepare_repository_config(dest)
 
-    print("[3/5] Validating server.conf and updating registry")
+    print("[4/6] Validating server.conf and updating registry")
     entry = build_registry_entry(
         registry_path,
         args.repo_url,
@@ -71,7 +83,7 @@ def main() -> None:
         dest,
     )
 
-    print("[4/5] Configuring webhook receiver")
+    print("[5/6] Configuring webhook receiver")
     repo_full_name, detected_webhook_url = update_automation_env(
         repo_root=root,
         registry_path=registry_path,
@@ -82,7 +94,7 @@ def main() -> None:
         default_tls_email=tls_email,
     )
     run_checked(["systemctl", "restart", "site-webhook-receiver.service"])
-    print("[5/5] Deploying repository")
+    print("[6/6] Deploying repository")
     result = deploy_registry_entry(
         entry,
         tls_email=tls_email,
