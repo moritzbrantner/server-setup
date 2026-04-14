@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=-/etc/default/server-setup-status-webapp
 Environment=SERVER_SETUP_ROOT=/opt/server-setup
+Environment=BUN_INSTALL=/root/.bun
 Environment=STATUS_WEBAPP_HOST=0.0.0.0
 Environment=STATUS_WEBAPP_PORT=4000
 WorkingDirectory=/opt/server-setup/monitor/webapp

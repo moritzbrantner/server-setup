@@ -9,6 +9,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+DEFAULT_BUN_INSTALL = "/root/.bun"
+
 
 def log(message: str) -> None:
     print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] {message}")
@@ -34,6 +36,34 @@ def install_pkgs(packages: list[str]) -> None:
     env = os.environ.copy()
     env["DEBIAN_FRONTEND"] = "noninteractive"
     run_checked(["apt-get", "install", "-y", *packages], env=env)
+
+
+def bun_env() -> dict[str, str]:
+    env = os.environ.copy()
+    bun_install = env.get("BUN_INSTALL", DEFAULT_BUN_INSTALL)
+    bun_bin = f"{bun_install}/bin"
+    env["BUN_INSTALL"] = bun_install
+    path_entries = env.get("PATH", "").split(os.pathsep) if env.get("PATH") else []
+    if bun_bin not in path_entries:
+        env["PATH"] = f"{bun_bin}{os.pathsep}{env['PATH']}" if env.get("PATH") else bun_bin
+    return env
+
+
+def ensure_bun_symlink(env: dict[str, str]) -> None:
+    link_path = Path("/usr/local/bin/bun")
+    target = Path(env["BUN_INSTALL"]) / "bin" / "bun"
+    if not target.is_file() or not link_path.parent.is_dir():
+        return
+    try:
+        if link_path.is_symlink():
+            if link_path.resolve() != target.resolve():
+                link_path.unlink()
+                link_path.symlink_to(target)
+            return
+        if not link_path.exists():
+            link_path.symlink_to(target)
+    except OSError:
+        pass
 
 
 def configure_docker_repo_for_apt() -> None:
@@ -107,13 +137,16 @@ def ensure_postgres_enabled() -> None:
 
 
 def install_or_update_bun() -> None:
-    if shutil.which("bun"):
+    env = bun_env()
+    bun_path = Path(env["BUN_INSTALL"]) / "bin" / "bun"
+    if bun_path.is_file() or shutil.which("bun", path=env["PATH"]):
         log("Updating bun")
-        run_checked(["bun", "upgrade"], allow_fail=True)
+        run_checked(["bun", "upgrade"], env=env, allow_fail=True)
     else:
         log("Installing bun")
         installer = subprocess.run(["curl", "-fsSL", "https://bun.sh/install"], capture_output=True, check=True)
-        subprocess.run(["bash"], input=installer.stdout, check=True)
+        subprocess.run(["bash"], input=installer.stdout, env=env, check=True)
+    ensure_bun_symlink(env)
 
 
 def install_or_update_gh() -> None:

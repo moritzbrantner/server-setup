@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from deploy_engine import build_registry_entry, clone_or_update_checkout, deploy_registry_entry, repo_basename, update_automation_env
+from interactive_cli import prompt_bool, prompt_text
 from registry_contract import DEFAULT_REGISTRY_PATH
+from server_conf_contract import create_server_conf_interactively
 from simple_setup_common import AUTOMATION_ENV_FILE, generate_webhook_secret, load_env_file, repo_root, require_root, run_checked, setup_automation_units
 
 
@@ -18,6 +21,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--email", default="")
     parser.add_argument("--skip-github-hook", action="store_true")
     return parser.parse_args()
+
+
+def ensure_server_conf(checkout_path: str | Path) -> Path:
+    checkout = Path(checkout_path)
+    conf_path = checkout / "server.conf"
+    if conf_path.is_file():
+        return conf_path
+    if not sys.stdin.isatty():
+        raise SystemExit(
+            f"Missing required file: {conf_path}. Run deploy_repo.py in an interactive terminal to create it,"
+            " or add server.conf manually before deploying."
+        )
+    return create_server_conf_interactively(
+        checkout,
+        prompt_text_fn=prompt_text,
+        prompt_bool_fn=prompt_bool,
+        print_fn=print,
+    )
 
 
 def main() -> None:
@@ -40,6 +61,7 @@ def main() -> None:
 
     print("[2/5] Cloning or updating repository checkout")
     branch = clone_or_update_checkout(args.repo_url, dest, args.branch)
+    ensure_server_conf(dest)
 
     print("[3/5] Validating server.conf and updating registry")
     entry = build_registry_entry(

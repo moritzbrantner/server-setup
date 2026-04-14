@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Callable
 
 
 class ValidationError(ValueError):
@@ -87,6 +88,105 @@ def _require_string(value: object, key: str, conf_path: Path) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValidationError(f"Validation error in {conf_path}: missing required key '{key}'")
     return value.strip()
+
+
+def _prompt_choice(
+    prompt_text_fn: Callable[..., str],
+    print_fn: Callable[[str], None],
+    prompt: str,
+    *,
+    choices: tuple[str, ...],
+    default: str,
+) -> str:
+    while True:
+        value = prompt_text_fn(prompt, default=default, required=True).strip().lower()
+        if value in choices:
+            return value
+        print_fn(f"Please enter one of: {', '.join(choices)}")
+
+
+def _prompt_port(prompt_text_fn: Callable[..., str], print_fn: Callable[[str], None], default: int) -> int:
+    while True:
+        value = prompt_text_fn("Runtime port", default=str(default), required=True).strip()
+        if value.isdigit() and 0 < int(value) <= 65535:
+            return int(value)
+        print_fn("Please enter a valid TCP port between 1 and 65535")
+
+
+def _clean_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def create_server_conf_interactively(
+    checkout_path: str | Path,
+    *,
+    prompt_text_fn: Callable[..., str],
+    prompt_bool_fn: Callable[..., bool],
+    print_fn: Callable[[str], None] = print,
+) -> Path:
+    checkout = Path(checkout_path)
+    conf_path = checkout / "server.conf"
+    if conf_path.exists():
+        return conf_path
+
+    print_fn(f"server.conf was not found in {checkout}.")
+    print_fn("Enter the deployment settings to create it.")
+
+    name = prompt_text_fn("Site name", default=checkout.name, required=True).strip()
+    domain = prompt_text_fn("Primary domain", required=True).strip()
+    mode = _prompt_choice(
+        prompt_text_fn,
+        print_fn,
+        "Runtime mode (static/service)",
+        choices=("static", "service"),
+        default="static",
+    )
+
+    build_output_default = "public" if mode == "static" else "."
+    build_output = prompt_text_fn(
+        "Relative build output path",
+        default=build_output_default,
+        required=True,
+    ).strip()
+    build_command = _clean_optional(prompt_text_fn("Build command", default=""))
+    enable_www_redirect = prompt_bool_fn("Redirect www to the primary domain", default=False)
+
+    config: dict[str, object] = {
+        "name": name,
+        "domain": domain,
+        "build_output": build_output,
+    }
+    if build_command:
+        config["deploy_hooks"] = {"build": build_command}
+    if enable_www_redirect:
+        config["nginx"] = {
+            "www_redirect": True,
+            "tls_hostnames": [domain, f"www.{domain}"],
+        }
+
+    if mode == "service":
+        runtime_command = prompt_text_fn("Runtime command", required=True).strip()
+        runtime_port = _prompt_port(prompt_text_fn, print_fn, default=3000)
+        health_endpoint = _clean_optional(prompt_text_fn("Health endpoint", default="/health"))
+        env_file = _clean_optional(prompt_text_fn("Environment file path", default=""))
+
+        runtime = {
+            "mode": "service",
+            "command": runtime_command,
+            "port": runtime_port,
+        }
+        if health_endpoint and health_endpoint != "/health":
+            runtime["health_endpoint"] = health_endpoint
+        if env_file:
+            runtime["env_file"] = env_file
+        config["runtime"] = runtime
+
+    conf_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    normalize_server_conf(checkout)
+    return conf_path
 
 
 def _validate_allowed_keys(conf_path: Path, section: str, payload: dict, allowed: set[str]) -> None:

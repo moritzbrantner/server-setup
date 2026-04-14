@@ -10,6 +10,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+DEFAULT_BUN_INSTALL = "/root/.bun"
+
 
 def log(message: str) -> None:
     print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] {message}")
@@ -36,21 +38,69 @@ def install_pkgs(packages: list[str]) -> None:
         raise SystemExit(result.returncode)
 
 
+def bun_env() -> dict[str, str]:
+    env = os.environ.copy()
+    bun_install = env.get("BUN_INSTALL", DEFAULT_BUN_INSTALL)
+    bun_bin = f"{bun_install}/bin"
+    env["BUN_INSTALL"] = bun_install
+    path_entries = env.get("PATH", "").split(os.pathsep) if env.get("PATH") else []
+    if bun_bin not in path_entries:
+        env["PATH"] = f"{bun_bin}{os.pathsep}{env['PATH']}" if env.get("PATH") else bun_bin
+    return env
+
+
+def bun_binary(env: dict[str, str]) -> Path:
+    return Path(env["BUN_INSTALL"]) / "bin" / "bun"
+
+
+def sync_bun_env(env: dict[str, str]) -> None:
+    os.environ["BUN_INSTALL"] = env["BUN_INSTALL"]
+    os.environ["PATH"] = env["PATH"]
+
+
+def ensure_bun_symlink(env: dict[str, str]) -> None:
+    link_path = Path("/usr/local/bin/bun")
+    target = bun_binary(env)
+    if not target.is_file() or not link_path.parent.is_dir():
+        return
+    try:
+        if link_path.is_symlink():
+            if link_path.resolve() != target.resolve():
+                link_path.unlink()
+                link_path.symlink_to(target)
+            return
+        if not link_path.exists():
+            link_path.symlink_to(target)
+    except OSError:
+        pass
+
+
 def ensure_bun() -> None:
-    if have_cmd("bun"):
-        log(f"Bun already present: {subprocess.check_output(['bun', '--version'], text=True).strip()}")
+    env = bun_env()
+    sync_bun_env(env)
+    bun_path = bun_binary(env)
+
+    if bun_path.is_file():
+        log(f"Bun already present: {subprocess.check_output([str(bun_path), '--version'], env=env, text=True).strip()}")
+    elif have_cmd("bun"):
+        log(f"Bun already present: {subprocess.check_output(['bun', '--version'], env=env, text=True).strip()}")
     else:
         log("Installing Bun")
         installer = subprocess.run(["curl", "-fsSL", "https://bun.sh/install"], capture_output=True, check=True)
-        subprocess.run(["bash"], input=installer.stdout, check=True)
-    os.environ["BUN_INSTALL"] = os.environ.get("BUN_INSTALL", f"{Path.home()}/.bun")
-    os.environ["PATH"] = f"{os.environ['BUN_INSTALL']}/bin:{os.environ['PATH']}"
-    if not have_cmd("bun"):
+        subprocess.run(["bash"], input=installer.stdout, env=env, check=True)
+    sync_bun_env(env)
+    ensure_bun_symlink(env)
+    if not bun_path.is_file() and shutil.which("bun", path=env["PATH"]) is None:
         raise SystemExit("Bun is still unavailable after installation.")
 
 
 def render_status_webapp_env(root_dir: str, host: str, port: str) -> str:
-    return f"SERVER_SETUP_ROOT={root_dir}\nSTATUS_WEBAPP_HOST={host}\nSTATUS_WEBAPP_PORT={port}\n"
+    return (
+        f"SERVER_SETUP_ROOT={root_dir}\n"
+        f"BUN_INSTALL={DEFAULT_BUN_INSTALL}\n"
+        f"STATUS_WEBAPP_HOST={host}\n"
+        f"STATUS_WEBAPP_PORT={port}\n"
+    )
 
 
 def render_status_webapp_service(root_dir: str, env_file: str) -> str:
@@ -63,6 +113,7 @@ def render_status_webapp_service(root_dir: str, env_file: str) -> str:
         "Type=simple\n"
         f"EnvironmentFile=-{env_file}\n"
         f"Environment=SERVER_SETUP_ROOT={root_dir}\n"
+        f"Environment=BUN_INSTALL={DEFAULT_BUN_INSTALL}\n"
         "Environment=STATUS_WEBAPP_HOST=0.0.0.0\n"
         "Environment=STATUS_WEBAPP_PORT=4000\n"
         f"WorkingDirectory={root_dir}/monitor/webapp\n"
@@ -77,12 +128,12 @@ def render_status_webapp_service(root_dir: str, env_file: str) -> str:
 def build_status_webapp(webapp_dir: Path) -> None:
     if not webapp_dir.is_dir():
         raise SystemExit(f"Monitoring webapp directory not found at {webapp_dir}")
-    os.environ["BUN_INSTALL"] = os.environ.get("BUN_INSTALL", f"{Path.home()}/.bun")
-    os.environ["PATH"] = f"{os.environ['BUN_INSTALL']}/bin:{os.environ['PATH']}"
+    env = bun_env()
+    sync_bun_env(env)
     log("Installing monitoring webapp dependencies with Bun")
-    subprocess.run(["bun", "install"], cwd=webapp_dir, check=True)
+    subprocess.run(["bun", "install"], cwd=webapp_dir, env=env, check=True)
     log("Building monitoring webapp with Bun")
-    subprocess.run(["bun", "run", "build"], cwd=webapp_dir, check=True)
+    subprocess.run(["bun", "run", "build"], cwd=webapp_dir, env=env, check=True)
 
 
 def enable_service(name: str) -> None:

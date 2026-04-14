@@ -6,6 +6,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+from collections import deque
 
 
 def load_module():
@@ -20,6 +21,29 @@ def load_module():
 class ServerConfContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
+
+    def _prompt_text(self, answers: list[str]):
+        queue = deque(answers)
+
+        def _inner(prompt: str, default: str | None = None, required: bool = False) -> str:
+            if not queue:
+                raise AssertionError(f"Unexpected prompt: {prompt}")
+            value = queue.popleft()
+            if value == "__DEFAULT__":
+                return default or ""
+            return value
+
+        return _inner
+
+    def _prompt_bool(self, answers: list[bool]):
+        queue = deque(answers)
+
+        def _inner(prompt: str, default: bool = False) -> bool:
+            if not queue:
+                raise AssertionError(f"Unexpected boolean prompt: {prompt}")
+            return queue.popleft()
+
+        return _inner
 
     def test_normalize_accepts_minimal_static_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,6 +128,61 @@ class ServerConfContractTests(unittest.TestCase):
 
             with self.assertRaisesRegex(self.module.ValidationError, "unsupported key 'repo'"):
                 self.module.normalize_server_conf(tmp)
+
+    def test_create_server_conf_interactively_generates_static_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conf_path = self.module.create_server_conf_interactively(
+                tmp,
+                prompt_text_fn=self._prompt_text(
+                    [
+                        "__DEFAULT__",
+                        "site.example.com",
+                        "__DEFAULT__",
+                        "__DEFAULT__",
+                        "npm ci && npm run build",
+                    ]
+                ),
+                prompt_bool_fn=self._prompt_bool([True]),
+                print_fn=lambda _: None,
+            )
+
+            conf = json.loads(conf_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(conf["name"], pathlib.Path(tmp).name)
+        self.assertEqual(conf["domain"], "site.example.com")
+        self.assertEqual(conf["build_output"], "public")
+        self.assertEqual(conf["deploy_hooks"]["build"], "npm ci && npm run build")
+        self.assertTrue(conf["nginx"]["www_redirect"])
+        self.assertEqual(conf["nginx"]["tls_hostnames"], ["site.example.com", "www.site.example.com"])
+
+    def test_create_server_conf_interactively_generates_service_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conf_path = self.module.create_server_conf_interactively(
+                tmp,
+                prompt_text_fn=self._prompt_text(
+                    [
+                        "api",
+                        "api.example.com",
+                        "service",
+                        "__DEFAULT__",
+                        "npm ci",
+                        "PORT=4100 npm run start",
+                        "4100",
+                        "/healthz",
+                        "/etc/default/api",
+                    ]
+                ),
+                prompt_bool_fn=self._prompt_bool([False]),
+                print_fn=lambda _: None,
+            )
+
+            conf = json.loads(conf_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(conf["runtime"]["mode"], "service")
+        self.assertEqual(conf["runtime"]["command"], "PORT=4100 npm run start")
+        self.assertEqual(conf["runtime"]["port"], 4100)
+        self.assertEqual(conf["runtime"]["health_endpoint"], "/healthz")
+        self.assertEqual(conf["runtime"]["env_file"], "/etc/default/api")
 
 
 if __name__ == "__main__":

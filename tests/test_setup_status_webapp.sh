@@ -13,6 +13,7 @@ test_render_status_webapp_env_uses_port_4000() {
   env_body="$(python3 "$ROOT_DIR/scripts/setup_status_webapp.py" --root "$ROOT_DIR" --render-env)"
 
   grep -Fq "SERVER_SETUP_ROOT=$ROOT_DIR" <<<"$env_body"
+  grep -Fq 'BUN_INSTALL=/root/.bun' <<<"$env_body"
   grep -Fq 'STATUS_WEBAPP_HOST=0.0.0.0' <<<"$env_body"
   grep -Fq 'STATUS_WEBAPP_PORT=4000' <<<"$env_body"
 }
@@ -22,6 +23,7 @@ test_render_status_webapp_service_restarts_on_failure() {
   unit="$(python3 "$ROOT_DIR/scripts/setup_status_webapp.py" --root "$ROOT_DIR" --render-service)"
 
   grep -Fq 'EnvironmentFile=-/etc/default/server-setup-status-webapp' <<<"$unit"
+  grep -Fq 'Environment=BUN_INSTALL=/root/.bun' <<<"$unit"
   grep -Fq "WorkingDirectory=$ROOT_DIR/monitor/webapp" <<<"$unit"
   grep -Fq "ExecStart=/usr/bin/env bash $ROOT_DIR/scripts/start-status-webapp.sh" <<<"$unit"
   grep -Fq 'Environment=STATUS_WEBAPP_PORT=4000' <<<"$unit"
