@@ -71,6 +71,28 @@ class RepoConfigBootstrapTests(unittest.TestCase):
         self.assertEqual(target.name, ".env")
         self.assertEqual(body, "# demo\nFOO=secret\nBAR=3000\n")
 
+    def test_create_dotfile_from_example_prompts_for_spaced_assignments_and_preserves_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = pathlib.Path(tmp)
+            example = checkout / ".env.example"
+            example.write_text(
+                " export FOO = https://example.com  # base url\nBAR = value\n",
+                encoding="utf-8",
+            )
+
+            target = self.module.create_dotfile_from_example(
+                example,
+                prompt_text_fn=self._prompt_text(["__DEFAULT__", "override"]),
+                print_fn=lambda _: None,
+            )
+
+            body = target.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            body,
+            " export FOO = https://example.com  # base url\nBAR = override\n",
+        )
+
     def test_ensure_example_dotfiles_skips_existing_targets_for_resume(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = pathlib.Path(tmp)

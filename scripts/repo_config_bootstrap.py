@@ -8,7 +8,9 @@ from typing import Callable
 
 
 IGNORED_DIR_NAMES = {".git", "node_modules", ".next"}
-ASSIGNMENT_RE = re.compile(r"^(?P<indent>\s*)(?P<export>export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)$")
+ASSIGNMENT_RE = re.compile(
+    r"^(?P<indent>\s*)(?P<export>export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_]*)(?P<separator>\s*=\s*)(?P<value>.*?)(?P<comment>\s+#.*)?$"
+)
 
 
 def find_example_dotfiles(checkout_path: str | Path) -> list[Path]:
@@ -37,12 +39,18 @@ def suggested_runtime_env_file(checkout_path: str | Path) -> str:
     return ""
 
 
-def _parse_assignment(line: str) -> tuple[str, str, str, str] | None:
+def _parse_assignment(line: str) -> tuple[str, str, str, str, str] | None:
     match = ASSIGNMENT_RE.match(line)
     if not match:
         return None
     prefix = f"{match.group('indent')}{match.group('export') or ''}"
-    return prefix, match.group("key"), match.group("value"), line
+    return (
+        prefix,
+        match.group("key"),
+        match.group("separator"),
+        match.group("value"),
+        match.group("comment") or "",
+    )
 
 
 def _render_value(key: str, example_value: str, prompt_text_fn: Callable[..., str], target_path: Path) -> str:
@@ -73,9 +81,9 @@ def create_dotfile_from_example(
         if not parsed:
             rendered.append(line)
             continue
-        prefix, key, example_value, _ = parsed
+        prefix, key, separator, example_value, comment = parsed
         value = _render_value(key, example_value, prompt_text_fn, target)
-        rendered.append(f"{prefix}{key}={value}")
+        rendered.append(f"{prefix}{key}{separator}{value}{comment}")
 
     body = "\n".join(rendered).rstrip() + "\n"
     target.parent.mkdir(parents=True, exist_ok=True)
