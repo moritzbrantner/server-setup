@@ -37,6 +37,9 @@ class DeployError(RuntimeError):
     """Raised when a deploy fails."""
 
 
+DEFAULT_BUN_INSTALL = "/root/.bun"
+
+
 @dataclasses.dataclass(frozen=True)
 class DeployResult:
     name: str
@@ -129,6 +132,18 @@ def run_checked(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] 
     if result.returncode != 0:
         raise DeployError(f"Command failed: {' '.join(cmd)}")
     return result
+
+
+def command_env() -> dict[str, str]:
+    env = os.environ.copy()
+    home = env.get("HOME") or str(Path.home())
+    bun_install = env.get("BUN_INSTALL") or (f"{home}/.bun" if home else DEFAULT_BUN_INSTALL)
+    bun_bin = f"{bun_install}/bin"
+    env["BUN_INSTALL"] = bun_install
+    path_entries = env.get("PATH", "").split(os.pathsep) if env.get("PATH") else []
+    if bun_bin not in path_entries:
+        env["PATH"] = f"{bun_bin}{os.pathsep}{env['PATH']}" if env.get("PATH") else bun_bin
+    return env
 
 
 def write_if_changed(path: Path, content: str) -> bool:
@@ -404,7 +419,7 @@ def apply_nginx_site_config(ctx: DeployContext, site_name: str, deploy_config: d
 def run_optional(cmd: str | None, *, cwd: Path) -> None:
     if not cmd:
         return
-    result = run(["bash", "-lc", cmd], cwd=cwd, capture=True)
+    result = run(["bash", "-lc", cmd], cwd=cwd, env=command_env(), capture=True)
     if result.stdout:
         sys.stdout.write(result.stdout)
     if result.stderr:

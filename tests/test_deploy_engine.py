@@ -154,3 +154,16 @@ class DeployEngineTests(unittest.TestCase):
             unit_path = pathlib.Path(env["SYSTEMD_UNIT_DIR"]) / "service-app.service"
             self.assertTrue(unit_path.exists())
             self.assertIn("PORT=3000 bun run start", unit_path.read_text(encoding="utf-8"))
+
+    def test_run_optional_uses_bun_aware_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = pathlib.Path(tmp)
+            with patch.dict(os.environ, {"HOME": "/root", "PATH": "/usr/bin"}, clear=False):
+                with patch.object(self.module, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run_mock:
+                    self.module.run_optional("bun run build", cwd=checkout)
+
+        _, kwargs = run_mock.call_args
+        self.assertEqual(kwargs["cwd"], checkout)
+        self.assertTrue(kwargs["capture"])
+        self.assertEqual(kwargs["env"]["BUN_INSTALL"], "/root/.bun")
+        self.assertTrue(kwargs["env"]["PATH"].startswith("/root/.bun/bin:"))
