@@ -13,8 +13,9 @@ import type {
   DashboardActionRequest,
   DashboardActionResult,
   EditableConfigDocument,
+  SiteDeploymentSettings,
 } from "@/lib/control";
-import type { DashboardSnapshot, StatusLevel } from "@/lib/status";
+import type { DashboardSnapshot, SiteCheck, StatusLevel } from "@/lib/status";
 
 type DashboardProps = {
   initialSnapshot: DashboardSnapshot;
@@ -132,6 +133,25 @@ function configModeLabel(kind: EditableConfigDocument["kind"]): string {
   return kind === "registry" ? "deploy registry" : "monitor list";
 }
 
+function deriveSiteDrafts(snapshot: DashboardSnapshot): Record<string, SiteDeploymentSettings> {
+  return Object.fromEntries(
+    snapshot.applications.map((application) => [
+      application.name,
+      {
+        siteName: application.name,
+        repoUrl: application.repoUrl || "",
+        webhookRepo: application.webhookRepo || "",
+        branch: application.branch || "",
+        checkoutPath: application.checkoutPath || "",
+      },
+    ])
+  );
+}
+
+function pushDeployTone(application: SiteCheck): string {
+  return pillTone(application.pushDeploy?.status || "unknown");
+}
+
 export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardProps) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +164,10 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [busyActionKey, setBusyActionKey] = useState<string | null>(null);
   const [configBusy, setConfigBusy] = useState(false);
+  const [siteDrafts, setSiteDrafts] = useState<Record<string, SiteDeploymentSettings>>(
+    deriveSiteDrafts(initialSnapshot)
+  );
+  const [siteSaveKey, setSiteSaveKey] = useState<string | null>(null);
 
   const refreshSnapshot = useEffectEvent(async () => {
     try {
@@ -158,6 +182,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
       const nextSnapshot = (await response.json()) as DashboardSnapshot;
       startTransition(() => {
         setSnapshot(nextSnapshot);
+        setSiteDrafts(deriveSiteDrafts(nextSnapshot));
         setError(null);
       });
     } catch (refreshError) {
@@ -183,6 +208,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
       startTransition(() => {
         setConfigDocument(nextConfig);
         setConfigDraft(nextConfig.raw);
+        setSiteDrafts(deriveSiteDrafts(snapshot));
         setConfigMessage(null);
         setAdminMessage(null);
         setAdminUnlocked(true);
@@ -253,6 +279,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
         setConfigDocument(payload.config);
         setConfigDraft(payload.config.raw);
         setSnapshot(payload.snapshot);
+        setSiteDrafts(deriveSiteDrafts(payload.snapshot));
         setConfigMessage(`Saved ${payload.config.path} and refreshed the dashboard.`);
         setAdminMessage(null);
         setError(null);
@@ -293,6 +320,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
       };
       startTransition(() => {
         setSnapshot(payload.snapshot);
+        setSiteDrafts(deriveSiteDrafts(payload.snapshot));
         setActionResult(payload.result);
         setAdminMessage(null);
         setError(null);
@@ -322,9 +350,75 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     setAdminUnlocked(false);
     setConfigDocument(null);
     setConfigDraft("");
+    setSiteDrafts(deriveSiteDrafts(snapshot));
     setConfigMessage(null);
     setActionResult(null);
     setAdminMessage("Admin token cleared from this browser session.");
+  });
+
+  const updateSiteDraft = useEffectEvent(
+    (siteName: string, field: keyof Omit<SiteDeploymentSettings, "siteName">, value: string) => {
+      setSiteDrafts((current) => ({
+        ...current,
+        [siteName]: {
+          ...(current[siteName] || {
+            siteName,
+            repoUrl: "",
+            webhookRepo: "",
+            branch: "",
+            checkoutPath: "",
+          }),
+          [field]: value,
+        },
+      }));
+    }
+  );
+
+  const saveSiteSettings = useEffectEvent(async (siteName: string) => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+
+    const settings = siteDrafts[siteName];
+    if (!settings) {
+      setAdminMessage(`No editable settings were found for ${siteName}.`);
+      return;
+    }
+
+    setSiteSaveKey(siteName);
+    try {
+      const response = await fetch("/api/site-settings", {
+        method: "PUT",
+        headers: adminHeaders(trimmedToken),
+        body: JSON.stringify(settings),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const payload = (await response.json()) as {
+        config: EditableConfigDocument;
+        snapshot: DashboardSnapshot;
+      };
+      startTransition(() => {
+        setConfigDocument(payload.config);
+        setConfigDraft(payload.config.raw);
+        setSnapshot(payload.snapshot);
+        setSiteDrafts(deriveSiteDrafts(payload.snapshot));
+        setAdminMessage(null);
+        setError(null);
+      });
+    } catch (saveError) {
+      const message =
+        saveError instanceof Error ? saveError.message : "Unable to save deployment settings.";
+      startTransition(() => {
+        setAdminMessage(message);
+      });
+    } finally {
+      setSiteSaveKey(null);
+    }
   });
 
   const configDirty = configDocument !== null && configDraft !== configDocument.raw;
@@ -715,6 +809,85 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
                   <dd>{application.lastHealthMessage || "n/a"}</dd>
                 </div>
               </dl>
+
+              <div className="deploy-panel">
+                <div className="deploy-panel-head">
+                  <div>
+                    <p className="eyebrow">Push to Main</p>
+                    <h4>{application.pushDeploy?.summary || "Push deploy readiness unavailable."}</h4>
+                  </div>
+                  <mark className={pushDeployTone(application)}>
+                    {application.pushDeploy ? formatStatus(application.pushDeploy.status) : "unknown"}
+                  </mark>
+                </div>
+                {application.pushDeploy?.issues && application.pushDeploy.issues.length > 0 ? (
+                  <ul className="issue-list">
+                    {application.pushDeploy.issues.map((issue) => (
+                      <li key={`${application.name}-${issue}`}>{issue}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="inline-note">Repository, branch, webhook filters, and host automation look ready.</p>
+                )}
+                {adminUnlocked && configDocument?.kind === "registry" ? (
+                  <div className="deploy-form">
+                    <label className="token-field">
+                      <span>Repository URL</span>
+                      <input
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          updateSiteDraft(application.name, "repoUrl", event.target.value)
+                        }
+                        type="text"
+                        value={siteDrafts[application.name]?.repoUrl || ""}
+                      />
+                    </label>
+                    <label className="token-field">
+                      <span>Webhook repo</span>
+                      <input
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          updateSiteDraft(application.name, "webhookRepo", event.target.value)
+                        }
+                        type="text"
+                        value={siteDrafts[application.name]?.webhookRepo || ""}
+                      />
+                    </label>
+                    <label className="token-field">
+                      <span>Tracked branch</span>
+                      <input
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          updateSiteDraft(application.name, "branch", event.target.value)
+                        }
+                        type="text"
+                        value={siteDrafts[application.name]?.branch || ""}
+                      />
+                    </label>
+                    <label className="token-field">
+                      <span>Checkout path</span>
+                      <input
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          updateSiteDraft(application.name, "checkoutPath", event.target.value)
+                        }
+                        type="text"
+                        value={siteDrafts[application.name]?.checkoutPath || ""}
+                      />
+                    </label>
+                    <div className="button-row">
+                      <button
+                        className="secondary-button"
+                        disabled={siteSaveKey !== null}
+                        onClick={() => void saveSiteSettings(application.name)}
+                        type="button"
+                      >
+                        {siteSaveKey === application.name ? "Saving..." : "Save push settings"}
+                      </button>
+                    </div>
+                  </div>
+                ) : adminUnlocked ? (
+                  <p className="inline-note">
+                    Per-site push settings can only be edited when the active status source is the deploy registry.
+                  </p>
+                ) : null}
+              </div>
 
               <div className="button-row site-actions">
                 <button

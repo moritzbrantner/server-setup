@@ -18,6 +18,7 @@ import {
   readEditableConfig,
   runDashboardAction,
   saveEditableConfig,
+  updateSiteDeploymentSettings,
 } from "./control";
 
 async function withEnv<T>(
@@ -217,4 +218,76 @@ exit 0
 
   const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
   assert.match(loggedCommand, /scripts\/deploy_repo\.py --repo-url https:\/\/github\.com\/example\/app\.git --dest \/srv\/apps\/app --branch main --skip-github-hook/);
+});
+
+test("updateSiteDeploymentSettings patches registry metadata", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const configPath = path.join(tmpDir, "registry.json");
+
+  await writeFile(
+    configPath,
+    JSON.stringify([
+      {
+        name: "app",
+        domain: "app.example.com",
+        deploy_config: {
+          name: "app",
+          domain: "app.example.com",
+          runtime: {
+            mode: "static",
+          },
+          service: {
+            name: "app.service",
+          },
+        },
+      },
+    ]),
+    "utf-8"
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response("ok", {
+      status: 200,
+      headers: {
+        "content-type": "text/plain",
+      },
+    });
+
+  try {
+    await withEnv(
+      {
+        SERVER_SETUP_ROOT: tmpDir,
+        STATUS_CONFIG_PATH: configPath,
+        STATUS_AUTOMATION_ENV_FILE: path.join(tmpDir, "site-automation"),
+        STATUS_SSH_HARDENING_CONFIG: path.join(tmpDir, "sshd.conf"),
+        STATUS_LETSENCRYPT_LIVE_DIR: path.join(tmpDir, "letsencrypt"),
+      },
+      async () => {
+        await writeFile(path.join(tmpDir, "site-automation"), "WEBHOOK_SECRET=test\nDEFAULT_TLS_EMAIL=ops@example.com\n", "utf-8");
+        await writeFile(path.join(tmpDir, "sshd.conf"), "PasswordAuthentication no\nPermitRootLogin no\n", "utf-8");
+
+        const response = await updateSiteDeploymentSettings({
+          siteName: "app",
+          repoUrl: "https://github.com/example/app.git",
+          webhookRepo: "",
+          branch: "main",
+          checkoutPath: "/srv/apps/app",
+        });
+
+        assert.equal(response.snapshot.applications[0]?.repoUrl, "https://github.com/example/app.git");
+        assert.equal(response.snapshot.applications[0]?.branch, "main");
+        assert.equal(response.snapshot.applications[0]?.checkoutPath, "/srv/apps/app");
+        assert.equal(response.snapshot.applications[0]?.webhookRepo, "example/app");
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const raw = await readFile(configPath, "utf-8");
+  assert.match(raw, /"repo_url": "https:\/\/github\.com\/example\/app\.git"/);
+  assert.match(raw, /"webhook_repo": "example\/app"/);
+  assert.match(raw, /"branch": "main"/);
+  assert.match(raw, /"checkout_path": "\/srv\/apps\/app"/);
 });

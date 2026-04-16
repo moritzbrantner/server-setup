@@ -312,7 +312,11 @@ main {
 .token-form,
 .token-field,
 .action-result,
-.site-actions {
+.site-actions,
+.deploy-panel,
+.deploy-form,
+.deploy-panel-head,
+.issue-list {
   display: grid;
   gap: 14px;
 }
@@ -460,6 +464,37 @@ main {
     rgba(255, 255, 255, 0.025);
 }
 
+.deploy-panel {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.deploy-panel-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.deploy-panel-head h4 {
+  margin: 8px 0 0;
+  font-size: 1rem;
+}
+
+.deploy-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.issue-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.issue-list li {
+  margin: 0;
+}
+
 .site-head {
   display: flex;
   justify-content: space-between;
@@ -541,7 +576,8 @@ main {
   .site-grid,
   .setup-grid,
   .admin-grid,
-  .button-grid {
+  .button-grid,
+  .deploy-form {
     grid-template-columns: 1fr;
   }
 
