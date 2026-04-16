@@ -41,6 +41,9 @@ export type LoadedSite = {
   lastHealthMessage: string | null;
   lastDeployTimestamp: string | null;
   tlsDomains: string[];
+  repoUrl?: string | null;
+  branch?: string | null;
+  checkoutPath?: string | null;
 };
 
 export type SiteCheck = LoadedSite & {
@@ -244,6 +247,26 @@ function normalizeTlsDomains(site: JsonRecord, domain: string | null): string[] 
   return domain ? [domain] : [];
 }
 
+function mergeSiteConfig(site: JsonRecord): JsonRecord {
+  const deployConfig = asObject(site.deploy_config);
+  return {
+    ...deployConfig,
+    ...site,
+    runtime: {
+      ...asObject(deployConfig.runtime),
+      ...asObject(site.runtime),
+    },
+    service: {
+      ...asObject(deployConfig.service),
+      ...asObject(site.service),
+    },
+    nginx: {
+      ...asObject(deployConfig.nginx),
+      ...asObject(site.nginx),
+    },
+  };
+}
+
 function deriveServiceName(site: JsonRecord, name: string, runtimeMode: string): string | null {
   if (runtimeMode !== "service") {
     return null;
@@ -274,7 +297,7 @@ export async function loadSites(configPath?: string, stateDir?: string | null): 
 
   return Promise.all(
     parsed.map(async (entry, index) => {
-      const site = asObject(entry);
+      const site = mergeSiteConfig(asObject(entry));
       const name = pickString(site, "name");
       if (!name) {
         throw new Error(`Site at index ${index} is missing a name.`);
@@ -317,6 +340,9 @@ export async function loadSites(configPath?: string, stateDir?: string | null): 
         lastHealthMessage: deploy.last_health_check?.message ?? null,
         lastDeployTimestamp: deriveLastDeployTimestamp(deploy),
         tlsDomains: normalizeTlsDomains(site, domain),
+        repoUrl: pickString(site, "repo_url"),
+        branch: pickString(site, "branch"),
+        checkoutPath: pickString(site, "checkout_path"),
       };
     })
   );

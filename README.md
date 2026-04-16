@@ -23,6 +23,8 @@ What it does:
 - stores `DEFAULT_TLS_EMAIL` in `/etc/default/site-automation`
 - optionally installs the status webapp
 
+If you want to use the status webapp's admin controls, set `STATUS_WEBAPP_ADMIN_TOKEN` in `/etc/default/server-setup-status-webapp` and restart `server-setup-status-webapp.service`.
+
 `--email` is required the first time you run it. Later runs can reuse the stored default.
 
 ## Deploy a repository

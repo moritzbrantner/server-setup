@@ -100,6 +100,7 @@ def render_status_webapp_env(root_dir: str, host: str, port: str) -> str:
         f"BUN_INSTALL={DEFAULT_BUN_INSTALL}\n"
         f"STATUS_WEBAPP_HOST={host}\n"
         f"STATUS_WEBAPP_PORT={port}\n"
+        "STATUS_WEBAPP_ADMIN_TOKEN=\n"
     )
 
 

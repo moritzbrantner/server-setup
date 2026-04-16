@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "tsx --test lib/status.test.ts components/dashboard.test.tsx"
+    "test": "tsx --test lib/status.test.ts lib/control.test.ts components/dashboard.test.tsx"
   },
   "dependencies": {
     "next": "16.1.6",

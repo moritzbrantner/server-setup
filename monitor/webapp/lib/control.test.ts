@@ -1,0 +1,220 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  writeFile,
+} from "node:fs/promises";
+
+import {
+  adminControlsEnabled,
+  requestHasAdminAccess,
+} from "./auth";
+import {
+  readEditableConfig,
+  runDashboardAction,
+  saveEditableConfig,
+} from "./control";
+
+async function withEnv<T>(
+  values: Record<string, string | undefined>,
+  run: () => Promise<T>
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+
+  for (const [key, value] of Object.entries(values)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function writeExecutable(filePath: string, body: string): Promise<void> {
+  await writeFile(filePath, body, "utf-8");
+  await chmod(filePath, 0o755);
+}
+
+test("admin access requires the configured token", async () => {
+  await withEnv({ STATUS_WEBAPP_ADMIN_TOKEN: "secret-token" }, async () => {
+    assert.equal(adminControlsEnabled(), true);
+    assert.equal(
+      requestHasAdminAccess(
+        new Request("http://example.test/api/config", {
+          headers: {
+            "x-status-admin-token": "secret-token",
+          },
+        })
+      ),
+      true
+    );
+    assert.equal(
+      requestHasAdminAccess(
+        new Request("http://example.test/api/config", {
+          headers: {
+            "x-status-admin-token": "wrong-token",
+          },
+        })
+      ),
+      false
+    );
+  });
+});
+
+test("saveEditableConfig persists a valid config array", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const configPath = path.join(tmpDir, "sites.json");
+
+  await withEnv(
+    {
+      SERVER_SETUP_ROOT: tmpDir,
+      STATUS_CONFIG_PATH: configPath,
+    },
+    async () => {
+      const saved = await saveEditableConfig(
+        JSON.stringify(
+          [
+            {
+              name: "app",
+              url: "https://example.com",
+            },
+          ],
+          null,
+          2
+        )
+      );
+
+      assert.equal(saved.path, configPath);
+      assert.equal(saved.kind, "monitor");
+
+      const reloaded = await readEditableConfig();
+      assert.match(reloaded.raw, /"name": "app"/);
+    }
+  );
+});
+
+test("runDashboardAction retries deploys from registry metadata", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const rootDir = path.join(tmpDir, "root");
+  const scriptsDir = path.join(rootDir, "scripts");
+  const binDir = path.join(tmpDir, "bin");
+  const logsDir = path.join(tmpDir, "logs");
+  const configPath = path.join(rootDir, "deploy", "registry.json");
+  const automationEnvPath = path.join(tmpDir, "site-automation");
+  const sshConfigPath = path.join(tmpDir, "sshd.conf");
+
+  await mkdir(scriptsDir, { recursive: true });
+  await mkdir(binDir);
+  await mkdir(logsDir);
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(
+    configPath,
+    JSON.stringify([
+      {
+        name: "app",
+        repo_url: "https://github.com/example/app.git",
+        branch: "main",
+        checkout_path: "/srv/apps/app",
+        deploy_config: {
+          name: "app",
+          domain: "app.example.com",
+          runtime: {
+            mode: "service",
+            port: 3001,
+            health_endpoint: "/healthz",
+          },
+          service: {
+            name: "app.service",
+          },
+        },
+      },
+    ]),
+    "utf-8"
+  );
+  await writeFile(path.join(scriptsDir, "deploy_repo.py"), "print('stub deploy')\n", "utf-8");
+  await writeFile(automationEnvPath, "WEBHOOK_SECRET=test\n", "utf-8");
+  await writeFile(sshConfigPath, "PasswordAuthentication no\nPermitRootLogin no\n", "utf-8");
+
+  await writeExecutable(
+    path.join(binDir, "systemctl"),
+    `#!/usr/bin/env bash
+command="$1"
+unit="$2"
+case "$command" in
+  is-active)
+    printf 'active\\n'
+    exit 0
+    ;;
+  restart|reload)
+    printf '%s %s\\n' "$command" "$unit" >>"${logsDir}/systemctl.log"
+    exit 0
+    ;;
+  *)
+    printf 'active\\n'
+    exit 0
+    ;;
+esac
+`
+  );
+  await writeExecutable(
+    path.join(binDir, "python3"),
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${logsDir}/python3.log"
+exit 0
+`
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response("ok", {
+      status: 200,
+      headers: {
+        "content-type": "text/plain",
+      },
+    });
+
+  try {
+    await withEnv(
+      {
+        SERVER_SETUP_ROOT: rootDir,
+        STATUS_CONFIG_PATH: configPath,
+        PATH: `${binDir}:${process.env.PATH || ""}`,
+        STATUS_AUTOMATION_ENV_FILE: automationEnvPath,
+        STATUS_SSH_HARDENING_CONFIG: sshConfigPath,
+        STATUS_LETSENCRYPT_LIVE_DIR: path.join(tmpDir, "letsencrypt"),
+      },
+      async () => {
+        const response = await runDashboardAction({
+          action: "retry-deploy",
+          siteName: "app",
+        });
+
+        assert.equal(response.result.action, "retry-deploy");
+        assert.equal(response.snapshot.applications[0]?.name, "app");
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
+  assert.match(loggedCommand, /scripts\/deploy_repo\.py --repo-url https:\/\/github\.com\/example\/app\.git --dest \/srv\/apps\/app --branch main --skip-github-hook/);
+});

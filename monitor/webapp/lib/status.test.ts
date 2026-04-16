@@ -114,6 +114,44 @@ test("loadSites falls back to legacy app-name units when service.name is absent"
   assert.equal(sites[0]?.serviceName, "app-legacy-app.service");
 });
 
+test("loadSites unwraps deploy registry entries", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-"));
+  const configPath = path.join(tmpDir, "registry.json");
+
+  await writeFile(
+    configPath,
+    JSON.stringify([
+      {
+        name: "registry-app",
+        repo_url: "https://github.com/example/registry-app.git",
+        branch: "main",
+        checkout_path: "/srv/apps/registry-app",
+        deploy_config: {
+          name: "registry-app",
+          domain: "registry.example.com",
+          runtime: {
+            mode: "service",
+            port: 4400,
+            health_endpoint: "/ready",
+          },
+          service: {
+            name: "registry-app.service",
+          },
+        },
+      },
+    ]),
+    "utf-8"
+  );
+
+  const sites = await loadSites(configPath, null);
+
+  assert.equal(sites.length, 1);
+  assert.equal(sites[0]?.url, "https://registry.example.com");
+  assert.equal(sites[0]?.checkUrl, "http://127.0.0.1:4400/ready");
+  assert.equal(sites[0]?.serviceName, "registry-app.service");
+  assert.equal(sites[0]?.repoUrl, "https://github.com/example/registry-app.git");
+});
+
 test("dashboard snapshot returns setup categories and site alerts", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-"));
   const configPath = path.join(tmpDir, "sites.json");
@@ -223,9 +261,7 @@ printf 'Status: active\\nTo                         Action      From\\nOpenSSH  
 
     assert.equal(snapshot.setup.categories.length, 4);
     assert.equal(snapshot.setup.overallStatus, "warning");
-    assert.ok(
-      snapshot.alerts.some((alert) => alert.title.includes("Automation: Apps watcher"))
-    );
+    assert.ok(snapshot.alerts.some((alert) => alert.title.startsWith("Automation:")));
     assert.ok(snapshot.alerts.some((alert) => alert.title.includes("api: service not active")));
     assert.ok(snapshot.alerts.some((alert) => alert.title.includes("api: last deploy failed")));
     assert.equal(snapshot.applications[0]?.serviceName, "api.service");

@@ -143,9 +143,13 @@ test("dashboard renders important issues and setup details", () => {
     ],
   };
 
-  const markup = renderToStaticMarkup(<Dashboard initialSnapshot={snapshot} />);
+  const markup = renderToStaticMarkup(
+    <Dashboard adminControlsEnabled={true} initialSnapshot={snapshot} />
+  );
 
   assert.match(markup, /What needs attention/);
+  assert.match(markup, /Config and recovery controls/);
+  assert.match(markup, /Retry deploy/);
   assert.match(markup, /Automation: Apps watcher/);
   assert.match(markup, /Bootstrap and operations signals/);
   assert.match(markup, /api\.service \(failed\)/);
