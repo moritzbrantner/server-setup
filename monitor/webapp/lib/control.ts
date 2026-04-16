@@ -29,6 +29,14 @@ export type DashboardActionResult = {
   finishedAt: string;
 };
 
+export type SiteDeploymentSettings = {
+  siteName: string;
+  repoUrl: string;
+  webhookRepo: string;
+  branch: string;
+  checkoutPath: string;
+};
+
 type JsonRecord = Record<string, unknown>;
 
 function repoRoot(): string {
@@ -68,6 +76,27 @@ async function defaultConfigPath(): Promise<string> {
 async function readJsonFile(filePath: string): Promise<unknown> {
   const raw = await fs.readFile(filePath, "utf-8");
   return JSON.parse(raw) as unknown;
+}
+
+function deriveGithubRepoFullName(repoUrl: string): string {
+  const trimmed = repoUrl.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.startsWith("git@github.com:")) {
+    return trimmed.replace(/^git@github\.com:/, "").replace(/\.git$/, "").trim();
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.hostname !== "github.com") {
+      return "";
+    }
+    return parsed.pathname.replace(/^\/+/, "").replace(/\.git$/, "").trim();
+  } catch {
+    return "";
+  }
 }
 
 function inferConfigKind(payload: unknown, configPath: string): EditableConfigDocument["kind"] {
@@ -224,6 +253,56 @@ export async function saveEditableConfig(raw: string): Promise<EditableConfigDoc
 
   await atomicWriteFile(configPath, raw.endsWith("\n") ? raw : `${raw}\n`);
   return readEditableConfig();
+}
+
+function updateStringField(record: JsonRecord, key: string, value: string): void {
+  const trimmed = value.trim();
+  if (trimmed) {
+    record[key] = trimmed;
+  } else {
+    delete record[key];
+  }
+}
+
+export async function updateSiteDeploymentSettings(
+  settings: SiteDeploymentSettings
+): Promise<{ config: EditableConfigDocument; snapshot: DashboardSnapshot }> {
+  const configPath = await defaultConfigPath();
+  const payload = await readJsonFile(configPath);
+  if (!Array.isArray(payload)) {
+    throw new Error("The active config file is not a JSON array.");
+  }
+  if (inferConfigKind(payload, configPath) !== "registry") {
+    throw new Error("Per-site deployment settings can only be edited when the active config is the deploy registry.");
+  }
+
+  let found = false;
+  const nextPayload = payload.map((entry) => {
+    const record = asRecord(entry);
+    if (String(record.name || "").trim() !== settings.siteName) {
+      return entry;
+    }
+
+    found = true;
+    const nextRecord: JsonRecord = { ...record };
+    updateStringField(nextRecord, "repo_url", settings.repoUrl);
+    const webhookRepo = settings.webhookRepo.trim() || deriveGithubRepoFullName(settings.repoUrl);
+    updateStringField(nextRecord, "webhook_repo", webhookRepo);
+    updateStringField(nextRecord, "branch", settings.branch);
+    updateStringField(nextRecord, "checkout_path", settings.checkoutPath);
+    return nextRecord;
+  });
+
+  if (!found) {
+    throw new Error(`No config entry named '${settings.siteName}' was found.`);
+  }
+
+  const raw = `${JSON.stringify(nextPayload, null, 2)}\n`;
+  await saveEditableConfig(raw);
+  return {
+    config: await readEditableConfig(),
+    snapshot: await getDashboardSnapshot(),
+  };
 }
 
 export async function runDashboardAction(

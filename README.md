@@ -1,11 +1,17 @@
 # server-setup
 
-`server-setup` now has one canonical setup flow for served repositories:
+`server-setup` supports one deployment workflow for served repositories:
 
 1. Prepare the server once.
 2. Deploy each repository with `deploy-repo`.
 
-Repositories that should be served must contain a valid root `server.conf`. Server-local state is generated into `deploy/registry.json`.
+Repositories that should be served must contain a valid root `server.conf`.
+
+Generated state lives on the target host:
+- `deploy/registry.json` stores the local deployment registry for that host
+- `/var/lib/server-setup/state/*.json` stores per-site deploy/runtime status
+
+The committed [`deploy/registry.example.json`](deploy/registry.example.json) file is only a shape example.
 
 ## Prepare the server
 
@@ -23,7 +29,12 @@ What it does:
 - stores `DEFAULT_TLS_EMAIL` in `/etc/default/site-automation`
 - optionally installs the status webapp
 
-If you want to use the status webapp's admin controls, set `STATUS_WEBAPP_ADMIN_TOKEN` in `/etc/default/server-setup-status-webapp` and restart `server-setup-status-webapp.service`.
+The Next.js status webapp is the supported dashboard for this repository.
+
+If you want to use its admin controls:
+1. Set `STATUS_WEBAPP_ADMIN_TOKEN` in `/etc/default/server-setup-status-webapp`.
+2. Restart `server-setup-status-webapp.service`.
+3. Send the token in the `x-status-admin-token` header when calling admin APIs.
 
 `--email` is required the first time you run it. Later runs can reuse the stored default.
 
@@ -56,6 +67,20 @@ What it does:
 - configures the webhook receiver and, when possible, the GitHub webhook
 
 If automatic GitHub webhook creation is not possible, the script prints the exact payload URL and secret to configure manually.
+
+## Deployment State
+
+`deploy-repo` and the webhook receiver write deploy state into `/var/lib/server-setup/state/<site>.json`.
+
+Each state file includes:
+- `last_deploy_status`
+- `last_deploy_timestamp`
+- `current_release`
+- `checkout_path`
+- `last_attempted_release`
+
+Failed deploys also record `last_failure_reason` and `last_failure_at`.
+Successful deploys record `last_success_at` and clear stale failure metadata.
 
 ## `server.conf`
 
@@ -124,6 +149,10 @@ Preview purge:
 ```bash
 sudo ./scripts/shutdown-server.sh --purge --dry-run
 ```
+
+## Legacy Migration
+
+If you still have an older `deploy/sites.json` based installation, [`scripts/migrate_registry.py`](scripts/migrate_registry.py) can perform a one-time migration into `deploy/registry.json`. That migration path is for existing legacy installs only; new setups should use `prepare-server` and `deploy-repo` directly.
 
 ## Development
 

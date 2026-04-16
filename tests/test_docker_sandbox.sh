@@ -79,7 +79,6 @@ test_docker_sandbox_deploys_tlm_deutschland() {
     --privileged \
     --cgroupns=host \
     --name "$CONTAINER_NAME" \
-    -e SKIP_UNLIGHTHOUSE=1 \
     -e TLM_DEUTSCHLAND_GITHUB_TOKEN="${TLM_DEUTSCHLAND_GITHUB_TOKEN:-}" \
     -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
     "$IMAGE_NAME" >/dev/null

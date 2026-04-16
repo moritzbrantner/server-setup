@@ -9,3 +9,6 @@ EnvironmentFile=-/etc/default/site-automation
 ExecStart=/usr/bin/env python3 ${REPO_ROOT}/scripts/webhook-receiver.py
 Restart=always
 RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

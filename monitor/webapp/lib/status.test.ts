@@ -150,6 +150,7 @@ test("loadSites unwraps deploy registry entries", async () => {
   assert.equal(sites[0]?.checkUrl, "http://127.0.0.1:4400/ready");
   assert.equal(sites[0]?.serviceName, "registry-app.service");
   assert.equal(sites[0]?.repoUrl, "https://github.com/example/registry-app.git");
+  assert.equal(sites[0]?.webhookRepo, null);
 });
 
 test("dashboard snapshot returns setup categories and site alerts", async () => {
@@ -167,6 +168,10 @@ test("dashboard snapshot returns setup categories and site alerts", async () => 
     JSON.stringify([
       {
         name: "api",
+        repo_url: "https://github.com/example/api.git",
+        branch: "main",
+        checkout_path: "/srv/apps/api",
+        webhook_repo: "example/api",
         domain: "api.example.com",
         runtime: {
           mode: "service",
@@ -199,7 +204,7 @@ test("dashboard snapshot returns setup categories and site alerts", async () => 
   );
   await writeFile(
     automationEnvPath,
-    "WEBHOOK_SECRET=\n",
+    "WEBHOOK_SECRET=test-secret\nDEFAULT_TLS_EMAIL=ops@example.com\nWEBHOOK_ALLOWED_REPOS=example/api\nWEBHOOK_ALLOWED_BRANCHES=main\n",
     "utf-8"
   );
   await writeFile(
@@ -261,11 +266,12 @@ printf 'Status: active\\nTo                         Action      From\\nOpenSSH  
 
     assert.equal(snapshot.setup.categories.length, 4);
     assert.equal(snapshot.setup.overallStatus, "warning");
-    assert.ok(snapshot.alerts.some((alert) => alert.title.startsWith("Automation:")));
+    assert.ok(snapshot.alerts.every((alert) => !alert.title.startsWith("Automation:")));
     assert.ok(snapshot.alerts.some((alert) => alert.title.includes("api: service not active")));
     assert.ok(snapshot.alerts.some((alert) => alert.title.includes("api: last deploy failed")));
     assert.equal(snapshot.applications[0]?.serviceName, "api.service");
     assert.equal(snapshot.applications[0]?.lastFailureReason, "systemd restart failed");
+    assert.equal(snapshot.applications[0]?.pushDeploy?.status, "ok");
   } finally {
     globalThis.fetch = originalFetch;
   }

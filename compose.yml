@@ -16,7 +16,6 @@ services:
       POSTGRES_USER: server_setup
       POSTGRES_PASSWORD: server_setup
       SKIP_EXAMPLE_SEED: "${SKIP_EXAMPLE_SEED:-0}"
-      SKIP_UNLIGHTHOUSE: "${SKIP_UNLIGHTHOUSE:-1}"
       TEST_DATABASE_URL: postgres://server_setup:server_setup@test-db:5432/server_setup
     ports:
       - "4000:4000"

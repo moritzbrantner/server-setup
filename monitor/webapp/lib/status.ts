@@ -44,6 +44,17 @@ export type LoadedSite = {
   repoUrl?: string | null;
   branch?: string | null;
   checkoutPath?: string | null;
+  webhookRepo?: string | null;
+};
+
+export type PushDeployReadiness = {
+  status: StatusLevel;
+  summary: string;
+  issues: string[];
+  branch: string | null;
+  repoUrl: string | null;
+  checkoutPath: string | null;
+  webhookRepo: string | null;
 };
 
 export type SiteCheck = LoadedSite & {
@@ -52,6 +63,7 @@ export type SiteCheck = LoadedSite & {
   latencyMs: number;
   error: string | null;
   serviceStatus: string | null;
+  pushDeploy?: PushDeployReadiness;
 };
 
 export type SetupCheck = {
@@ -136,6 +148,16 @@ type SshHardeningSummary = {
 };
 
 type ParsedEnvFile = Record<string, string>;
+
+type AutomationContext = {
+  webhookServiceStatus: string;
+  envFilePath: string;
+  envFileExists: boolean;
+  webhookSecretConfigured: boolean;
+  defaultTlsEmailConfigured: boolean;
+  allowedRepos: string[];
+  allowedBranches: string[];
+};
 
 function repoRoot(): string {
   return process.env.SERVER_SETUP_ROOT || path.resolve(process.cwd(), "..", "..");
@@ -343,6 +365,7 @@ export async function loadSites(configPath?: string, stateDir?: string | null): 
         repoUrl: pickString(site, "repo_url"),
         branch: pickString(site, "branch"),
         checkoutPath: pickString(site, "checkout_path"),
+        webhookRepo: pickString(site, "webhook_repo"),
       };
     })
   );
@@ -666,42 +689,138 @@ function parseEnvFile(raw: string): ParsedEnvFile {
   return parsed;
 }
 
-async function getAutomationChecks(): Promise<SetupCheck[]> {
-  const webhook = await getUnitStatus("site-webhook-receiver.service");
+function parseCsvSetting(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+async function getAutomationContext(): Promise<AutomationContext> {
+  const webhookServiceStatus = await getUnitStatus("site-webhook-receiver.service");
   const envFilePath = systemPath("STATUS_AUTOMATION_ENV_FILE", "/etc/default/site-automation");
   const envFileExists = await pathExists(envFilePath);
   const envRaw = envFileExists ? await readTextFile(envFilePath) : null;
   const parsedEnv = envRaw ? parseEnvFile(envRaw) : {};
-  const webhookSecretConfigured = Boolean(parsedEnv.WEBHOOK_SECRET);
+  return {
+    webhookServiceStatus,
+    envFilePath,
+    envFileExists,
+    webhookSecretConfigured: Boolean(parsedEnv.WEBHOOK_SECRET),
+    defaultTlsEmailConfigured: Boolean(parsedEnv.DEFAULT_TLS_EMAIL),
+    allowedRepos: parseCsvSetting(parsedEnv.WEBHOOK_ALLOWED_REPOS),
+    allowedBranches: parseCsvSetting(parsedEnv.WEBHOOK_ALLOWED_BRANCHES),
+  };
+}
 
+function getAutomationChecks(context: AutomationContext): SetupCheck[] {
   return [
     unitCheck(
       "automation-webhook",
       "Webhook receiver",
-      webhook,
+      context.webhookServiceStatus,
       "warning",
       "systemctl is unavailable, so webhook status could not be determined."
     ),
     {
       id: "automation-env-file",
       label: "Automation env file",
-      status: envFileExists ? "ok" : "warning",
-      summary: envFileExists
+      status: context.envFileExists ? "ok" : "warning",
+      summary: context.envFileExists
         ? "Automation environment file is present."
         : "Automation environment file is missing.",
-      detail: envFileExists ? envFilePath : null,
+      detail: context.envFileExists ? context.envFilePath : null,
     },
     {
       id: "automation-webhook-secret",
       label: "Webhook secret",
-      status: envFileExists ? (webhookSecretConfigured ? "ok" : "warning") : "unknown",
-      summary: envFileExists
-        ? webhookSecretConfigured
+      status: context.envFileExists ? (context.webhookSecretConfigured ? "ok" : "warning") : "unknown",
+      summary: context.envFileExists
+        ? context.webhookSecretConfigured
           ? "Webhook secret is configured."
           : "Webhook secret is missing."
         : "Webhook secret could not be checked because the automation env file is missing.",
     },
+    {
+      id: "automation-default-tls-email",
+      label: "Default TLS email",
+      status: context.envFileExists ? (context.defaultTlsEmailConfigured ? "ok" : "warning") : "unknown",
+      summary: context.envFileExists
+        ? context.defaultTlsEmailConfigured
+          ? "Default TLS email is configured."
+          : "Default TLS email is missing."
+        : "Default TLS email could not be checked because the automation env file is missing.",
+    },
   ];
+}
+
+function pushDeploySummary(branch: string | null, issues: string[]): string {
+  if (issues.length === 0) {
+    return "Ready: pushes to main should trigger a deploy.";
+  }
+
+  if (branch && branch !== "main") {
+    return `Configured for pushes to ${branch}, not main.`;
+  }
+
+  return issues[0] || "Push deploy readiness could not be determined.";
+}
+
+function evaluatePushDeployReadiness(
+  site: LoadedSite,
+  context: AutomationContext
+): PushDeployReadiness {
+  const criticalIssues: string[] = [];
+  const warningIssues: string[] = [];
+
+  if (!site.repoUrl) {
+    criticalIssues.push("Repository URL is missing.");
+  }
+  if (!site.checkoutPath) {
+    criticalIssues.push("Checkout path is missing.");
+  }
+  if (!site.webhookRepo) {
+    criticalIssues.push("Webhook repository name is missing.");
+  }
+  if (!site.branch) {
+    criticalIssues.push("Tracked branch is missing.");
+  } else if (site.branch !== "main") {
+    warningIssues.push(`Tracked branch is ${site.branch}, not main.`);
+  }
+
+  if (!context.envFileExists) {
+    criticalIssues.push("Automation environment file is missing.");
+  }
+  if (context.webhookServiceStatus !== "active") {
+    criticalIssues.push(`Webhook receiver is ${context.webhookServiceStatus}.`);
+  }
+  if (!context.webhookSecretConfigured) {
+    criticalIssues.push("Webhook secret is missing.");
+  }
+  if (!context.defaultTlsEmailConfigured) {
+    criticalIssues.push("Default TLS email is missing.");
+  }
+  if (context.allowedBranches.length > 0 && !context.allowedBranches.includes("main")) {
+    criticalIssues.push("Webhook allowed branches do not include main.");
+  }
+  if (site.webhookRepo && context.allowedRepos.length > 0 && !context.allowedRepos.includes(site.webhookRepo)) {
+    criticalIssues.push(`Webhook allowed repos do not include ${site.webhookRepo}.`);
+  }
+
+  const issues = criticalIssues.length > 0 ? [...criticalIssues, ...warningIssues] : warningIssues;
+  return {
+    status: criticalIssues.length > 0 ? "critical" : warningIssues.length > 0 ? "warning" : "ok",
+    summary: pushDeploySummary(site.branch || null, issues),
+    issues,
+    branch: site.branch || null,
+    repoUrl: site.repoUrl || null,
+    checkoutPath: site.checkoutPath || null,
+    webhookRepo: site.webhookRepo || null,
+  };
 }
 
 async function getTlsChecks(sites: LoadedSite[], now: Date): Promise<SetupCheck[]> {
@@ -851,14 +970,15 @@ async function getHardeningChecks(): Promise<SetupCheck[]> {
 async function getSetupHealth(
   sites: LoadedSite[],
   system: DashboardSnapshot["system"],
-  now: Date
+  now: Date,
+  automationContext: AutomationContext
 ): Promise<DashboardSnapshot["setup"]> {
-  const [automationChecks, tlsChecks, hardeningChecks, statusWebapp] = await Promise.all([
-    getAutomationChecks(),
+  const [tlsChecks, hardeningChecks, statusWebapp] = await Promise.all([
     getTlsChecks(sites, now),
     getHardeningChecks(),
     getUnitStatus("server-setup-status-webapp.service"),
   ]);
+  const automationChecks = getAutomationChecks(automationContext);
 
   const categories: SetupCategory[] = [
     {
@@ -1017,6 +1137,21 @@ function buildSiteAlerts(applications: SiteCheck[]): DashboardAlert[] {
         summary: application.lastHealthMessage || `Latest health check status is ${healthStatus}.`,
       });
     }
+
+    const pushDeploy = application.pushDeploy;
+    if (pushDeploy) {
+      const level = alertLevelFromStatus(pushDeploy.status);
+      if (level) {
+        alerts.push({
+          id: `site-push-${application.name}`,
+          level,
+          scope: "site",
+          siteName: application.name,
+          title: `${application.name}: push deploy not ready`,
+          summary: pushDeploy.summary,
+        });
+      }
+    }
   }
 
   return alerts;
@@ -1045,11 +1180,16 @@ export async function getDashboardSnapshot(
 ): Promise<DashboardSnapshot> {
   const now = options.now ?? new Date();
   const sites = await loadSites(options.configPath, options.stateDir);
-  const [system, applications] = await Promise.all([
+  const [system, automationContext, checkedApplications] = await Promise.all([
     getSystemSummary(),
+    getAutomationContext(),
     Promise.all(sites.map((site) => checkSite(site))),
   ]);
-  const setup = await getSetupHealth(applications, system, now);
+  const applications = checkedApplications.map((application) => ({
+    ...application,
+    pushDeploy: evaluatePushDeployReadiness(application, automationContext),
+  }));
+  const setup = await getSetupHealth(applications, system, now, automationContext);
   const alerts = sortAlerts([...buildHostAlerts(setup), ...buildSiteAlerts(applications)]);
 
   const healthySites = applications.filter((site) => site.ok).length;
