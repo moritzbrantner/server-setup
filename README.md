@@ -39,6 +39,11 @@ If you want to use its admin controls:
 2. Restart `server-setup-status-webapp.service`.
 3. Send the token in the `x-status-admin-token` header when calling admin APIs.
 
+If you also want the status webapp to manage GitHub repository secrets:
+1. Set `STATUS_WEBAPP_GITHUB_TOKEN` in `/etc/default/server-setup-status-webapp`.
+2. Restart `server-setup-status-webapp.service`.
+3. Use a GitHub token that can administer Actions secrets for the target repositories.
+
 `--email` is required the first time you run it. Later runs can reuse the stored default.
 
 ## Deploy a repository
@@ -140,6 +145,16 @@ Restart one app service:
 ```bash
 sudo python3 ./scripts/manage_services.py restart --app your-app
 ```
+
+Manage GitHub Actions secrets from the terminal:
+
+```bash
+python3 ./scripts/manage_github_secrets.py list --site your-app
+python3 ./scripts/manage_github_secrets.py set MY_SECRET --site your-app --value "super-secret"
+python3 ./scripts/manage_github_secrets.py delete MY_SECRET --site your-app
+```
+
+The terminal workflow uses your `gh` authentication or `GH_TOKEN`/`GITHUB_TOKEN`. The status webapp uses `STATUS_WEBAPP_GITHUB_TOKEN` when configured.
 
 Stop managed services:
 

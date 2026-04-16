@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +45,29 @@ export type SiteDeploymentSettings = {
   webhookRepo: string;
   branch: string;
   checkoutPath: string;
+};
+
+export type GithubSecretRecord = {
+  name: string;
+  updatedAt: string | null;
+  visibility: string | null;
+  numSelectedRepos: number | null;
+};
+
+export type GithubSecretsDocument = {
+  siteName: string | null;
+  repo: string;
+  secrets: GithubSecretRecord[];
+  fetchedAt: string;
+};
+
+export type GithubSecretMutationResult = {
+  action: "set" | "delete";
+  siteName: string | null;
+  repo: string;
+  name: string;
+  summary: string;
+  finishedAt: string;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -158,6 +181,13 @@ function readSiteName(value: unknown): string {
   return value.trim();
 }
 
+function readRequiredString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} is required.`);
+  }
+  return value.trim();
+}
+
 function readRepoUrl(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error("A non-empty repository URL is required.");
@@ -239,6 +269,127 @@ async function runTypedCommand(
   return {
     ...result,
     action,
+  };
+}
+
+async function runProcess(
+  command: string,
+  args: string[],
+  options: CommandOptions & { input?: string } = {}
+): Promise<{ stdout: string; stderr: string }> {
+  if (options.input === undefined) {
+    const { stdout = "", stderr = "" } = await execFileAsync(command, args, {
+      cwd: repoRoot(),
+      timeout: options.timeout ?? 5 * 60 * 1000,
+      maxBuffer: 1024 * 1024,
+      env: options.env,
+    });
+    return { stdout, stderr };
+  }
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: repoRoot(),
+      env: options.env,
+      stdio: "pipe",
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timeoutMs = options.timeout ?? 5 * 60 * 1000;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+
+      const failure = new Error(
+        timedOut ? `Command timed out after ${timeoutMs}ms.` : `Command exited with status ${code ?? "unknown"}.`
+      ) as NodeJS.ErrnoException & {
+        stdout?: string;
+        stderr?: string;
+        code?: number | string;
+      };
+      failure.stdout = stdout;
+      failure.stderr = stderr;
+      failure.code = code ?? "spawn_failed";
+      reject(failure);
+    });
+
+    child.stdin.end(options.input);
+  });
+}
+
+async function runJsonScript(
+  args: string[],
+  options: CommandOptions & { input?: string } = {}
+): Promise<JsonRecord> {
+  try {
+    const { stdout } = await runProcess(
+      "python3",
+      [resolveRepoPath("scripts/manage_github_secrets.py"), ...args],
+      options
+    );
+    const parsed = JSON.parse(stdout || "{}") as unknown;
+    if (typeof parsed !== "object" || parsed === null) {
+      throw new Error("Expected a JSON object response.");
+    }
+    return parsed as JsonRecord;
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & {
+      stdout?: string;
+      stderr?: string;
+      code?: string | number;
+    };
+    const detail = outputTail(failure.stdout || "", failure.stderr || "");
+    const reason =
+      typeof failure.code === "number"
+        ? `Command exited with status ${failure.code}.`
+        : failure.message || "Command execution failed.";
+    throw new Error(detail ? `${reason}\n${detail}` : reason);
+  }
+}
+
+function parseGithubSecretsDocument(payload: JsonRecord): GithubSecretsDocument {
+  const repo = typeof payload.repo === "string" ? payload.repo.trim() : "";
+  if (!repo) {
+    throw new Error("GitHub secret response did not include a repository name.");
+  }
+
+  const secrets = Array.isArray(payload.secrets)
+    ? payload.secrets
+        .map((entry) => asRecord(entry))
+        .filter((entry) => typeof entry.name === "string" && entry.name.trim())
+        .map((entry) => ({
+          name: String(entry.name).trim(),
+          updatedAt: typeof entry.updatedAt === "string" && entry.updatedAt.trim() ? entry.updatedAt.trim() : null,
+          visibility: typeof entry.visibility === "string" && entry.visibility.trim() ? entry.visibility.trim() : null,
+          numSelectedRepos:
+            typeof entry.numSelectedRepos === "number" && Number.isFinite(entry.numSelectedRepos)
+              ? entry.numSelectedRepos
+              : null,
+        }))
+    : [];
+
+  return {
+    siteName: typeof payload.siteName === "string" && payload.siteName.trim() ? payload.siteName.trim() : null,
+    repo,
+    secrets,
+    fetchedAt: new Date().toISOString(),
   };
 }
 
@@ -342,6 +493,67 @@ export async function updateSiteDeploymentSettings(
   return {
     config: await readEditableConfig(),
     snapshot: await getDashboardSnapshot(),
+  };
+}
+
+export async function listGithubSecrets(siteName: string): Promise<GithubSecretsDocument> {
+  const payload = await runJsonScript(["list", "--site", readSiteName(siteName), "--json"]);
+  return parseGithubSecretsDocument(payload);
+}
+
+export async function setGithubSecret(
+  siteName: string,
+  name: string,
+  value: string
+): Promise<{ document: GithubSecretsDocument; result: GithubSecretMutationResult }> {
+  const trimmedSiteName = readSiteName(siteName);
+  const trimmedName = readRequiredString(name, "Secret name");
+  if (!value) {
+    throw new Error("A non-empty secret value is required.");
+  }
+
+  const payload = await runJsonScript(["set", trimmedName, "--site", trimmedSiteName, "--json"], {
+    input: value,
+  });
+  const document = await listGithubSecrets(trimmedSiteName);
+  return {
+    document,
+    result: {
+      action: "set",
+      siteName: typeof payload.siteName === "string" && payload.siteName.trim() ? payload.siteName.trim() : null,
+      repo: typeof payload.repo === "string" ? payload.repo.trim() : document.repo,
+      name: trimmedName,
+      summary:
+        typeof payload.message === "string" && payload.message.trim()
+          ? payload.message.trim()
+          : `Updated GitHub secret ${trimmedName}.`,
+      finishedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export async function deleteGithubSecret(
+  siteName: string,
+  name: string
+): Promise<{ document: GithubSecretsDocument; result: GithubSecretMutationResult }> {
+  const trimmedSiteName = readSiteName(siteName);
+  const trimmedName = readRequiredString(name, "Secret name");
+
+  const payload = await runJsonScript(["delete", trimmedName, "--site", trimmedSiteName, "--json"]);
+  const document = await listGithubSecrets(trimmedSiteName);
+  return {
+    document,
+    result: {
+      action: "delete",
+      siteName: typeof payload.siteName === "string" && payload.siteName.trim() ? payload.siteName.trim() : null,
+      repo: typeof payload.repo === "string" ? payload.repo.trim() : document.repo,
+      name: trimmedName,
+      summary:
+        typeof payload.message === "string" && payload.message.trim()
+          ? payload.message.trim()
+          : `Deleted GitHub secret ${trimmedName}.`,
+      finishedAt: new Date().toISOString(),
+    },
   };
 }
 

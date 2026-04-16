@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT_DIR / "scripts"))
 
 from simple_setup_common import (
     git_command_with_github_auth,
+    github_auth_token_from_gh,
     github_repo_full_name,
     merge_csv_values,
     setup_automation_units,
@@ -179,6 +180,14 @@ class SimpleSetupCommonTests(unittest.TestCase):
                 "/tmp/app",
             ],
         )
+        run_mock.assert_not_called()
+
+    def test_github_auth_token_from_gh_prefers_env_token(self) -> None:
+        with patch.dict("os.environ", {"STATUS_WEBAPP_GITHUB_TOKEN": "env-token"}, clear=True):
+            with patch("simple_setup_common.subprocess.run") as run_mock:
+                token = github_auth_token_from_gh()
+
+        self.assertEqual(token, "env-token")
         run_mock.assert_not_called()
 
 
