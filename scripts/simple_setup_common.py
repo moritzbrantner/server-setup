@@ -146,7 +146,27 @@ def github_repo_full_name(repo_url: str) -> str:
     return "/".join(parts[:2]) if len(parts) >= 2 else ""
 
 
+def github_cli_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = os.environ.copy()
+    token = ""
+    for key in ("GH_TOKEN", "GITHUB_TOKEN", "STATUS_WEBAPP_GITHUB_TOKEN", "SITE_AUTOMATION_GITHUB_TOKEN"):
+        candidate = env.get(key, "").strip()
+        if candidate:
+            token = candidate
+            break
+    if token:
+        env.setdefault("GH_TOKEN", token)
+        env.setdefault("GITHUB_TOKEN", token)
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
 def github_auth_token_from_gh() -> str:
+    env_token = github_cli_env().get("GH_TOKEN", "").strip()
+    if env_token:
+        return env_token
+
     if shutil.which("gh") is None:
         return ""
 
@@ -165,7 +185,7 @@ def github_auth_token_from_gh() -> str:
         if key in seen:
             continue
         seen.add(key)
-        result = subprocess.run(cmd, text=True, capture_output=True, check=False)
+        result = subprocess.run(cmd, text=True, capture_output=True, check=False, env=github_cli_env())
         token = (result.stdout or "").strip()
         if result.returncode == 0 and token:
             return token
@@ -238,7 +258,8 @@ def maybe_configure_github_webhook(repo_full_name: str, payload_url: str, secret
     if shutil.which("gh") is None:
         return ("skipped", "GitHub CLI is not installed")
 
-    auth = run_checked(["gh", "auth", "status", "--hostname", "github.com"], allow_fail=True, capture=True)
+    gh_env = github_cli_env()
+    auth = run_checked(["gh", "auth", "status", "--hostname", "github.com"], allow_fail=True, capture=True, env=gh_env)
     if auth.returncode != 0:
         return ("skipped", "run 'gh auth login' to let this script create the GitHub webhook automatically")
 
@@ -246,6 +267,7 @@ def maybe_configure_github_webhook(repo_full_name: str, payload_url: str, secret
         ["gh", "api", f"repos/{repo_full_name}/hooks"],
         allow_fail=True,
         capture=True,
+        env=gh_env,
     )
     if hooks_response.returncode != 0:
         return ("skipped", "unable to query existing GitHub hooks with gh")
@@ -287,7 +309,7 @@ def maybe_configure_github_webhook(repo_full_name: str, payload_url: str, secret
             "active=true",
         ]
     )
-    result = run_checked(cmd, allow_fail=True, capture=True)
+    result = run_checked(cmd, allow_fail=True, capture=True, env=gh_env)
     if result.returncode != 0:
         return ("skipped", "GitHub webhook was not created automatically; create it manually with the printed URL and secret")
     return ("ok", "GitHub webhook created or updated")

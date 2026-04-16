@@ -15,9 +15,12 @@ import {
   requestHasAdminAccess,
 } from "./auth";
 import {
+  deleteGithubSecret,
+  listGithubSecrets,
   readEditableConfig,
   runDashboardAction,
   saveEditableConfig,
+  setGithubSecret,
   updateSiteDeploymentSettings,
 } from "./control";
 
@@ -468,4 +471,131 @@ test("updateSiteDeploymentSettings patches registry metadata", async () => {
   assert.match(raw, /"webhook_repo": "example\/app"/);
   assert.match(raw, /"branch": "main"/);
   assert.match(raw, /"checkout_path": "\/srv\/apps\/app"/);
+});
+
+test("listGithubSecrets reads secrets for a managed site", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const rootDir = path.join(tmpDir, "root");
+  const scriptsDir = path.join(rootDir, "scripts");
+  const binDir = path.join(tmpDir, "bin");
+  const configPath = path.join(rootDir, "deploy", "registry.json");
+
+  await mkdir(scriptsDir, { recursive: true });
+  await mkdir(binDir);
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(
+    configPath,
+    JSON.stringify([
+      {
+        name: "app",
+        repo_url: "https://github.com/example/app.git",
+        webhook_repo: "example/app",
+        checkout_path: "/srv/apps/app",
+      },
+    ]),
+    "utf-8"
+  );
+  await writeFile(path.join(scriptsDir, "manage_github_secrets.py"), "print('stub')\n", "utf-8");
+  await writeExecutable(
+    path.join(binDir, "python3"),
+    `#!/usr/bin/env bash
+if [[ "$2" == "list" ]]; then
+  cat <<'JSON'
+{"action":"list","repo":"example/app","siteName":"app","checkoutPath":"/srv/apps/app","envFilePath":"/srv/apps/app/.env","workflowFiles":[".github/workflows/deploy.yml"],"secrets":[{"name":"API_KEY","configured":true,"presentInEnvFile":true,"requiredByWorkflows":[".github/workflows/deploy.yml"]}]}
+JSON
+  exit 0
+fi
+exit 1
+`
+  );
+
+  await withEnv(
+    {
+      SERVER_SETUP_ROOT: rootDir,
+      STATUS_CONFIG_PATH: configPath,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    },
+    async () => {
+      const document = await listGithubSecrets("app");
+      assert.equal(document.repo, "example/app");
+      assert.equal(document.siteName, "app");
+      assert.equal(document.envFilePath, "/srv/apps/app/.env");
+      assert.equal(document.secrets[0]?.name, "API_KEY");
+      assert.equal(document.secrets[0]?.configured, true);
+    }
+  );
+});
+
+test("setGithubSecret and deleteGithubSecret refresh the secret list", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const rootDir = path.join(tmpDir, "root");
+  const scriptsDir = path.join(rootDir, "scripts");
+  const binDir = path.join(tmpDir, "bin");
+  const logsDir = path.join(tmpDir, "logs");
+  const configPath = path.join(rootDir, "deploy", "registry.json");
+
+  await mkdir(scriptsDir, { recursive: true });
+  await mkdir(binDir);
+  await mkdir(logsDir);
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(
+    configPath,
+    JSON.stringify([
+      {
+        name: "app",
+        repo_url: "https://github.com/example/app.git",
+        webhook_repo: "example/app",
+        checkout_path: "/srv/apps/app",
+      },
+    ]),
+    "utf-8"
+  );
+  await writeFile(path.join(scriptsDir, "manage_github_secrets.py"), "print('stub')\n", "utf-8");
+  await writeExecutable(
+    path.join(binDir, "python3"),
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${logsDir}/python3.log"
+if [[ "$2" == "set" ]]; then
+  cat <<'JSON'
+{"action":"set","repo":"example/app","siteName":"app","message":"Updated repository secret API_KEY in /srv/apps/app/.env."}
+JSON
+  exit 0
+fi
+if [[ "$2" == "delete" ]]; then
+  cat <<'JSON'
+{"action":"delete","repo":"example/app","siteName":"app","message":"Deleted repository secret API_KEY from /srv/apps/app/.env."}
+JSON
+  exit 0
+fi
+if [[ "$2" == "list" ]]; then
+  cat <<'JSON'
+{"action":"list","repo":"example/app","siteName":"app","checkoutPath":"/srv/apps/app","envFilePath":"/srv/apps/app/.env","workflowFiles":[".github/workflows/deploy.yml"],"secrets":[{"name":"API_KEY","configured":true,"presentInEnvFile":true,"requiredByWorkflows":[".github/workflows/deploy.yml"]}]}
+JSON
+  exit 0
+fi
+exit 1
+`
+  );
+
+  await withEnv(
+    {
+      SERVER_SETUP_ROOT: rootDir,
+      STATUS_CONFIG_PATH: configPath,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    },
+    async () => {
+      const setResponse = await setGithubSecret("app", "API_KEY", "secret-value");
+      assert.equal(setResponse.result.action, "set");
+      assert.equal(setResponse.document.secrets[0]?.name, "API_KEY");
+
+      const deleteResponse = await deleteGithubSecret("app", "API_KEY");
+      assert.equal(deleteResponse.result.action, "delete");
+      assert.equal(deleteResponse.document.repo, "example/app");
+    }
+  );
+
+  const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
+  assert.match(loggedCommand, /manage_github_secrets\.py set API_KEY --site app --json/);
+  assert.match(loggedCommand, /manage_github_secrets\.py delete API_KEY --site app --json/);
+  assert.match(loggedCommand, /manage_github_secrets\.py list --site app --json/);
 });

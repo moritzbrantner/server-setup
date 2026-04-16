@@ -141,6 +141,16 @@ Restart one app service:
 sudo python3 ./scripts/manage_services.py restart --app your-app
 ```
 
+Manage repository secrets from the terminal:
+
+```bash
+python3 ./scripts/manage_github_secrets.py list --site your-app
+python3 ./scripts/manage_github_secrets.py set MY_SECRET --site your-app --value "super-secret"
+python3 ./scripts/manage_github_secrets.py delete MY_SECRET --site your-app
+```
+
+The script scans `.github/workflows/*.yml` and `.github/workflows/*.yaml` in the checked-out repository for `secrets.*` references, then stores values in the repo-local env file. If the repo has a root `.env.example`, the managed target is the matching `.env`; otherwise the script falls back to the runtime env file or `./.env`.
+
 Stop managed services:
 
 ```bash

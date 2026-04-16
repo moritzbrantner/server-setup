@@ -13,6 +13,7 @@ import type {
   DashboardActionRequest,
   DashboardActionResult,
   EditableConfigDocument,
+  GithubSecretsDocument,
   SiteDeploymentSettings,
 } from "@/lib/control";
 import type { DashboardSnapshot, SiteCheck, StatusLevel } from "@/lib/status";
@@ -30,12 +31,27 @@ type NewSiteDraft = {
   skipGithubHook: boolean;
 };
 
+type GithubSecretDraft = {
+  name: string;
+  value: string;
+};
+
+type GithubSecretSiteOption = {
+  siteName: string;
+  repoLabel: string;
+};
+
 const EMPTY_NEW_SITE_DRAFT: NewSiteDraft = {
   repoUrl: "",
   branch: "",
   checkoutPath: "",
   email: "",
   skipGithubHook: false,
+};
+
+const EMPTY_GITHUB_SECRET_DRAFT: GithubSecretDraft = {
+  name: "",
+  value: "",
 };
 
 function formatMetric(value: number | null, suffix = ""): string {
@@ -170,6 +186,16 @@ function deriveSiteDrafts(snapshot: DashboardSnapshot): Record<string, SiteDeplo
   );
 }
 
+function deriveGithubSecretSiteOptions(snapshot: DashboardSnapshot): GithubSecretSiteOption[] {
+  return snapshot.applications
+    .filter((application) => application.checkoutPath)
+    .map((application) => ({
+      siteName: application.name,
+      repoLabel: application.webhookRepo || application.repoUrl || application.name,
+    }))
+    .sort((left, right) => left.siteName.localeCompare(right.siteName));
+}
+
 function pushDeployTone(application: SiteCheck): string {
   return pillTone(application.pushDeploy?.status || "unknown");
 }
@@ -191,6 +217,16 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
   );
   const [siteSaveKey, setSiteSaveKey] = useState<string | null>(null);
   const [newSiteDraft, setNewSiteDraft] = useState<NewSiteDraft>(EMPTY_NEW_SITE_DRAFT);
+  const [githubSecretsDocument, setGithubSecretsDocument] = useState<GithubSecretsDocument | null>(null);
+  const [githubSecretsMessage, setGithubSecretsMessage] = useState<string | null>(null);
+  const [githubSecretsBusy, setGithubSecretsBusy] = useState(false);
+  const [githubSecretsSiteName, setGithubSecretsSiteName] = useState<string>(
+    deriveGithubSecretSiteOptions(initialSnapshot)[0]?.siteName || ""
+  );
+  const [githubSecretDraft, setGithubSecretDraft] = useState<GithubSecretDraft>(EMPTY_GITHUB_SECRET_DRAFT);
+  const githubSecretSiteOptions = deriveGithubSecretSiteOptions(snapshot);
+  const selectedGithubSecretSite =
+    githubSecretSiteOptions.find((entry) => entry.siteName === githubSecretsSiteName) || null;
 
   const refreshSnapshot = useEffectEvent(async () => {
     try {
@@ -234,6 +270,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
         setSiteDrafts(deriveSiteDrafts(snapshot));
         setConfigMessage(null);
         setAdminMessage(null);
+        setGithubSecretsMessage(null);
         setAdminUnlocked(true);
       });
     } catch (loadError) {
@@ -243,6 +280,45 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
         setAdminUnlocked(false);
         setAdminMessage(message);
       });
+    }
+  });
+
+  const loadGithubSecrets = useEffectEvent(async (siteName: string) => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+    if (!siteName.trim()) {
+      setGithubSecretsDocument(null);
+      return;
+    }
+
+    setGithubSecretsBusy(true);
+    try {
+      const response = await fetch(`/api/github-secrets?siteName=${encodeURIComponent(siteName)}`, {
+        cache: "no-store",
+        headers: adminHeaders(trimmedToken),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const document = (await response.json()) as GithubSecretsDocument;
+      startTransition(() => {
+        setGithubSecretsDocument(document);
+        setGithubSecretsMessage(null);
+        setAdminMessage(null);
+      });
+    } catch (loadError) {
+      const message =
+        loadError instanceof Error ? loadError.message : "Unable to load repository secrets.";
+      startTransition(() => {
+        setGithubSecretsDocument(null);
+        setGithubSecretsMessage(message);
+      });
+    } finally {
+      setGithubSecretsBusy(false);
     }
   });
 
@@ -257,12 +333,31 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
   }, [loadConfig]);
 
   useEffect(() => {
+    if (githubSecretSiteOptions.length === 0) {
+      setGithubSecretsSiteName("");
+      setGithubSecretsDocument(null);
+      return;
+    }
+
+    if (!githubSecretSiteOptions.some((entry) => entry.siteName === githubSecretsSiteName)) {
+      setGithubSecretsSiteName(githubSecretSiteOptions[0]?.siteName || "");
+    }
+  }, [githubSecretSiteOptions, githubSecretsSiteName]);
+
+  useEffect(() => {
     const intervalId = setInterval(() => {
       void refreshSnapshot();
     }, 30000);
 
     return () => clearInterval(intervalId);
   }, [refreshSnapshot]);
+
+  useEffect(() => {
+    if (!adminUnlocked || !githubSecretsSiteName) {
+      return;
+    }
+    void loadGithubSecrets(githubSecretsSiteName);
+  }, [adminUnlocked, githubSecretsSiteName, loadGithubSecrets]);
 
   const unlockAdminControls = useEffectEvent(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -434,6 +529,115 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     }
   });
 
+  const updateGithubSecretDraft = useEffectEvent(
+    (field: keyof GithubSecretDraft, value: string) => {
+      setGithubSecretDraft((current) => ({
+        ...current,
+        [field]: value,
+      }));
+    }
+  );
+
+  const saveGithubSecret = useEffectEvent(async () => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+    if (!githubSecretsSiteName) {
+      setGithubSecretsMessage("Select a deployed site first.");
+      return;
+    }
+    if (!githubSecretDraft.name.trim()) {
+      setGithubSecretsMessage("Secret name is required.");
+      return;
+    }
+    if (!githubSecretDraft.value) {
+      setGithubSecretsMessage("Secret value is required.");
+      return;
+    }
+
+    setGithubSecretsBusy(true);
+    try {
+      const response = await fetch("/api/github-secrets", {
+        method: "PUT",
+        headers: adminHeaders(trimmedToken),
+        body: JSON.stringify({
+          siteName: githubSecretsSiteName,
+          name: githubSecretDraft.name,
+          value: githubSecretDraft.value,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const payload = (await response.json()) as {
+        document: GithubSecretsDocument;
+        result: { summary: string };
+      };
+      startTransition(() => {
+        setGithubSecretsDocument(payload.document);
+        setGithubSecretsMessage(payload.result.summary);
+        setGithubSecretDraft(EMPTY_GITHUB_SECRET_DRAFT);
+        setAdminMessage(null);
+      });
+    } catch (saveError) {
+      const message =
+        saveError instanceof Error ? saveError.message : "Unable to save the repository secret.";
+      startTransition(() => {
+        setGithubSecretsMessage(message);
+      });
+    } finally {
+      setGithubSecretsBusy(false);
+    }
+  });
+
+  const removeGithubSecret = useEffectEvent(async (name: string) => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+    if (!githubSecretsSiteName) {
+      setGithubSecretsMessage("Select a deployed site first.");
+      return;
+    }
+
+    setGithubSecretsBusy(true);
+    try {
+      const response = await fetch("/api/github-secrets", {
+        method: "DELETE",
+        headers: adminHeaders(trimmedToken),
+        body: JSON.stringify({
+          siteName: githubSecretsSiteName,
+          name,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const payload = (await response.json()) as {
+        document: GithubSecretsDocument;
+        result: { summary: string };
+      };
+      startTransition(() => {
+        setGithubSecretsDocument(payload.document);
+        setGithubSecretsMessage(payload.result.summary);
+        setAdminMessage(null);
+      });
+    } catch (deleteError) {
+      const message =
+        deleteError instanceof Error ? deleteError.message : "Unable to delete the repository secret.";
+      startTransition(() => {
+        setGithubSecretsMessage(message);
+      });
+    } finally {
+      setGithubSecretsBusy(false);
+    }
+  });
+
   const discardConfigChanges = useEffectEvent(() => {
     if (!configDocument) {
       return;
@@ -450,6 +654,9 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     setConfigDraft("");
     setSiteDrafts(deriveSiteDrafts(snapshot));
     setConfigMessage(null);
+    setGithubSecretsDocument(null);
+    setGithubSecretsMessage(null);
+    setGithubSecretDraft(EMPTY_GITHUB_SECRET_DRAFT);
     setActionResult(null);
     setAdminMessage("Admin token cleared from this browser session.");
   });
@@ -780,6 +987,159 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
                 dashboard over to the deploy registry.
               </p>
             ) : null}
+          </article>
+
+          <article className="admin-card">
+            <div className="admin-card-head">
+              <div>
+                <h3>Repository secrets</h3>
+                <p>Scan GitHub workflow files for required secrets and store the values in the repo env file.</p>
+              </div>
+            </div>
+            {githubSecretSiteOptions.length > 0 ? (
+              <>
+                <div className="token-form">
+                  <label className="token-field">
+                    <span>Managed site</span>
+                    <select
+                      disabled={!adminUnlocked || githubSecretsBusy}
+                      onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                        setGithubSecretsSiteName(event.target.value);
+                        setGithubSecretsDocument(null);
+                        setGithubSecretsMessage(null);
+                      }}
+                      value={githubSecretsSiteName}
+                    >
+                      {githubSecretSiteOptions.map((option) => (
+                        <option key={option.siteName} value={option.siteName}>
+                          {option.siteName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="config-meta">
+                    <span>Repository</span>
+                    <strong>{githubSecretsDocument?.repo || selectedGithubSecretSite?.repoLabel || "n/a"}</strong>
+                  </div>
+                  <div className="config-meta">
+                    <span>Env file</span>
+                    <strong>{githubSecretsDocument?.envFilePath || "Loading..."}</strong>
+                  </div>
+                  <label className="token-field">
+                    <span>Secret name</span>
+                    <input
+                      disabled={!adminUnlocked || githubSecretsBusy}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        updateGithubSecretDraft("name", event.target.value)
+                      }
+                      placeholder="NEXT_PUBLIC_API_URL"
+                      type="text"
+                      value={githubSecretDraft.name}
+                    />
+                  </label>
+                  <label className="token-field">
+                    <span>Secret value</span>
+                    <input
+                      autoComplete="off"
+                      disabled={!adminUnlocked || githubSecretsBusy}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        updateGithubSecretDraft("value", event.target.value)
+                      }
+                      placeholder="Paste the secret value"
+                      type="password"
+                      value={githubSecretDraft.value}
+                    />
+                  </label>
+                  <div className="button-row">
+                    <button
+                      className="primary-button"
+                      disabled={
+                        !adminUnlocked ||
+                        githubSecretsBusy ||
+                        !githubSecretsSiteName ||
+                        !githubSecretDraft.name.trim() ||
+                        !githubSecretDraft.value
+                      }
+                      onClick={() => void saveGithubSecret()}
+                      type="button"
+                    >
+                      {githubSecretsBusy ? "Saving..." : "Save secret"}
+                    </button>
+                    <button
+                      className="ghost-button"
+                      disabled={!adminUnlocked || githubSecretsBusy || !githubSecretsSiteName}
+                      onClick={() => void loadGithubSecrets(githubSecretsSiteName)}
+                      type="button"
+                    >
+                      {githubSecretsBusy ? "Refreshing..." : "Refresh secrets"}
+                    </button>
+                  </div>
+                </div>
+                <p className="inline-note">
+                  Workflow references are discovered from `.github/workflows/*.yml` and
+                  `.github/workflows/*.yaml`. Saving a name writes it to the repo env file without
+                  showing the stored value back.
+                </p>
+                {githubSecretsDocument?.workflowFiles.length ? (
+                  <p className="inline-note">
+                    Workflow files: {githubSecretsDocument.workflowFiles.join(", ")}
+                  </p>
+                ) : (
+                  <p className="inline-note">
+                    No workflow files were found. Existing env-file keys are still editable here.
+                  </p>
+                )}
+                {githubSecretsMessage ? <p className="inline-note">{githubSecretsMessage}</p> : null}
+                <div className="alert-list">
+                  {githubSecretsDocument?.secrets.length ? (
+                    githubSecretsDocument.secrets.map((secret) => (
+                      <article
+                        className={`alert-card ${secret.configured ? "alert-ok" : "alert-warning"}`}
+                        key={`${githubSecretsDocument.envFilePath}-${secret.name}`}
+                      >
+                        <div className="alert-head">
+                          <div>
+                            <h3>{secret.name}</h3>
+                            <p>
+                              {secret.requiredByWorkflows.length > 0
+                                ? `Required by ${secret.requiredByWorkflows.join(", ")}`
+                                : "Only present in the env file"}
+                            </p>
+                          </div>
+                          <div className="button-row">
+                            <mark className={pillTone(secret.configured ? "ok" : "warning")}>
+                              {secret.configured ? "configured" : "missing"}
+                            </mark>
+                            <button
+                              className="ghost-button"
+                              disabled={!adminUnlocked || githubSecretsBusy}
+                              onClick={() => void removeGithubSecret(secret.name)}
+                              type="button"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))
+                  ) : (
+                    <article className="alert-card alert-ok">
+                      <div className="alert-head">
+                        <div>
+                          <h3>No repository secrets yet</h3>
+                          <p>Add a secret above or commit workflow files that reference `secrets.*` values.</p>
+                        </div>
+                        <mark className={pillTone("unknown")}>empty</mark>
+                      </div>
+                    </article>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="inline-note">
+                No deployed site currently exposes checkout metadata in the active status source.
+              </p>
+            )}
           </article>
         </div>
         <div className="panel-content">
