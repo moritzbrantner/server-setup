@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
 from registry_contract import DEFAULT_REGISTRY_PATH, load_registry
-from simple_setup_common import github_cli_env, github_repo_full_name
+from repository_secrets import (
+    delete_repository_secret,
+    describe_repository_secrets,
+    list_repository_secrets,
+    set_repository_secret,
+    to_json,
+)
+from simple_setup_common import github_repo_full_name
 
 
 def normalize_repo_full_name(value: str) -> str:
@@ -30,170 +34,116 @@ def normalize_repo_full_name(value: str) -> str:
     return "/".join(parts[:2]) if len(parts) >= 2 else ""
 
 
-def resolve_repo_from_site(site_name: str, registry_path: Path) -> str:
-    for entry in load_registry(registry_path):
-        if str(entry.get("name") or "").strip() != site_name:
-            continue
-
-        repo_full_name = str(entry.get("webhook_repo") or "").strip()
-        if repo_full_name:
-            return repo_full_name
-
-        repo_url = str(entry.get("repo_url") or "").strip()
-        repo_full_name = github_repo_full_name(repo_url)
-        if repo_full_name:
-            return repo_full_name
-
-        raise SystemExit(f"Registry entry '{site_name}' does not reference a github.com repository.")
-
-    raise SystemExit(f"No registry entry named '{site_name}' was found in {registry_path}.")
-
-
-def resolve_target_repo(args: argparse.Namespace) -> tuple[str, str | None]:
-    if args.repo:
-        repo_full_name = normalize_repo_full_name(args.repo)
-        if not repo_full_name:
-            raise SystemExit(f"Unable to derive a GitHub repository name from '{args.repo}'.")
-        return repo_full_name, None
+def find_registry_entry(args: argparse.Namespace) -> dict[str, object]:
+    registry_path = Path(args.config).resolve()
+    entries = load_registry(registry_path)
 
     if args.site:
-        registry_path = Path(args.config).resolve()
-        return resolve_repo_from_site(args.site.strip(), registry_path), args.site.strip()
+        match = next((entry for entry in entries if str(entry.get("name") or "").strip() == args.site.strip()), None)
+        if not match:
+            raise SystemExit(f"No registry entry named '{args.site}' was found in {registry_path}.")
+        return match
 
-    raise SystemExit("Either --repo or --site is required.")
+    if args.repo:
+        normalized_repo = normalize_repo_full_name(args.repo)
+        for entry in entries:
+            repo_url = str(entry.get("repo_url") or "").strip()
+            webhook_repo = str(entry.get("webhook_repo") or "").strip()
+            if normalized_repo and webhook_repo == normalized_repo:
+                return entry
+            if repo_url and repo_url == args.repo.strip():
+                return entry
+        raise SystemExit(f"No registry entry matched '{args.repo}' in {registry_path}.")
 
-
-def run_gh(args: list[str], *, stdin_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    if not shutil_which("gh"):
-        raise SystemExit("GitHub CLI is not installed. Install 'gh' first.")
-
-    result = subprocess.run(
-        ["gh", *args],
-        text=True,
-        input=stdin_text,
-        capture_output=True,
-        env=github_cli_env(),
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        if detail:
-            raise SystemExit(detail)
-        raise SystemExit(f"gh {' '.join(args)} failed with exit code {result.returncode}.")
-    return result
+    raise SystemExit("One of --site, --repo, or --checkout must be provided.")
 
 
-def shutil_which(name: str) -> str | None:
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(directory) / name
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
+def resolve_target(args: argparse.Namespace) -> dict[str, str | None]:
+    if args.checkout:
+        checkout_path = str(Path(args.checkout).resolve())
+        return {
+            "siteName": None,
+            "repo": None,
+            "checkoutPath": checkout_path,
+            "runtimeEnvFile": "",
+        }
+
+    entry = find_registry_entry(args)
+    deploy_config = entry.get("deploy_config") or {}
+    runtime = deploy_config.get("runtime") or {}
+    repo_url = str(entry.get("repo_url") or "").strip()
+    return {
+        "siteName": str(entry.get("name") or "").strip() or None,
+        "repo": str(entry.get("webhook_repo") or "").strip() or github_repo_full_name(repo_url) or None,
+        "checkoutPath": str(entry.get("checkout_path") or "").strip() or None,
+        "runtimeEnvFile": str(runtime.get("env_file") or "").strip(),
+    }
 
 
-def list_repo_secrets(repo_full_name: str) -> list[dict[str, object]]:
-    result = run_gh(
-        [
-            "secret",
-            "list",
-            "--repo",
-            repo_full_name,
-            "--json",
-            "name,updatedAt,visibility,numSelectedRepos",
-        ]
-    )
-    payload = json.loads(result.stdout or "[]")
-    if not isinstance(payload, list):
-        raise SystemExit("GitHub CLI returned an unexpected secret list payload.")
-    secrets: list[dict[str, object]] = []
-    for entry in payload:
-        if not isinstance(entry, dict):
-            continue
-        secrets.append(
-            {
-                "name": str(entry.get("name") or ""),
-                "updatedAt": str(entry.get("updatedAt") or "") or None,
-                "visibility": str(entry.get("visibility") or "") or None,
-                "numSelectedRepos": (
-                    int(entry["numSelectedRepos"])
-                    if isinstance(entry.get("numSelectedRepos"), int)
-                    else None
-                ),
-            }
-        )
-    secrets.sort(key=lambda item: str(item.get("name") or ""))
-    return secrets
+def render_result(
+    action: str,
+    target: dict[str, str | None],
+    payload: dict[str, object],
+    as_json: bool,
+    message: str | None = None,
+) -> None:
+    response = {
+        "action": action,
+        "siteName": target.get("siteName"),
+        "repo": target.get("repo"),
+        "checkoutPath": target.get("checkoutPath"),
+        **payload,
+    }
+    if message:
+        response["message"] = message
+
+    if as_json:
+        print(to_json(response))
+        return
+
+    if message:
+        print(message)
+    print(describe_repository_secrets(payload))
 
 
 def read_secret_value(args: argparse.Namespace) -> str:
     if args.value is not None:
         return args.value
-
     if args.value_file:
         return Path(args.value_file).read_text(encoding="utf-8")
-
     if not sys.stdin.isatty():
         return sys.stdin.read()
-
-    value = getpass.getpass("Secret value: ")
-    if not value:
-        raise SystemExit("Secret value cannot be empty.")
-    return value
-
-
-def render_result(payload: dict[str, object], as_json: bool) -> None:
-    if as_json:
-        print(json.dumps(payload, indent=2))
-        return
-
-    repo = str(payload.get("repo") or "")
-    site_name = str(payload.get("siteName") or "")
-    action = str(payload.get("action") or "")
-    if action == "list":
-        print(f"Repository: {repo}")
-        if site_name:
-            print(f"Site: {site_name}")
-        secrets = payload.get("secrets") or []
-        if not isinstance(secrets, list) or not secrets:
-            print("No repository secrets found.")
-            return
-        for secret in secrets:
-            if not isinstance(secret, dict):
-                continue
-            updated_at = str(secret.get("updatedAt") or "unknown")
-            print(f"- {secret.get('name')} (updated {updated_at})")
-        return
-
-    message = str(payload.get("message") or "").strip()
-    if message:
-        print(message)
+    raise SystemExit("Provide --value, --value-file, or pipe the secret value on stdin.")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Manage repository-level GitHub Actions secrets.")
+    parser = argparse.ArgumentParser(
+        description="Manage workflow-discovered repository secrets stored in repo-local env files."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_target_options(target_parser: argparse.ArgumentParser) -> None:
         target = target_parser.add_mutually_exclusive_group(required=True)
-        target.add_argument("--repo", default="", help="GitHub repository in OWNER/REPO format or as a github.com URL.")
         target.add_argument("--site", default="", help="Managed site name from deploy/registry.json.")
+        target.add_argument("--repo", default="", help="Repository URL or OWNER/REPO resolved through deploy/registry.json.")
+        target.add_argument("--checkout", default="", help="Direct checkout path to a repository.")
         target_parser.add_argument(
             "--config",
             default=str(DEFAULT_REGISTRY_PATH),
-            help="Registry path used with --site (default: deploy/registry.json).",
+            help="Registry path used with --site or --repo (default: deploy/registry.json).",
         )
         target_parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
-    list_parser = subparsers.add_parser("list", help="List repository secrets.")
+    list_parser = subparsers.add_parser("list", help="List workflow/env-file secrets for a repository.")
     add_target_options(list_parser)
 
-    set_parser = subparsers.add_parser("set", help="Create or update a repository secret.")
+    set_parser = subparsers.add_parser("set", help="Create or update a secret in the repository env file.")
     add_target_options(set_parser)
     set_parser.add_argument("name", help="Secret name.")
-    set_parser.add_argument("--value", default=None, help="Secret value. Reads from stdin or a prompt if omitted.")
+    set_parser.add_argument("--value", default=None, help="Secret value. Reads from stdin if omitted.")
     set_parser.add_argument("--value-file", default="", help="Read the secret value from a file.")
 
-    delete_parser = subparsers.add_parser("delete", help="Delete a repository secret.")
+    delete_parser = subparsers.add_parser("delete", help="Delete a secret from the repository env file.")
     add_target_options(delete_parser)
     delete_parser.add_argument("name", help="Secret name.")
 
@@ -203,46 +153,45 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    repo_full_name, site_name = resolve_target_repo(args)
+    target = resolve_target(args)
+    checkout_path = target.get("checkoutPath")
+    if not checkout_path:
+        raise SystemExit("The selected repository does not have a checkout_path in the registry.")
+    runtime_env_file = target.get("runtimeEnvFile") or ""
 
     if args.command == "list":
-        render_result(
-            {
-                "action": "list",
-                "repo": repo_full_name,
-                "siteName": site_name,
-                "secrets": list_repo_secrets(repo_full_name),
-            },
-            args.json,
-        )
+        payload = list_repository_secrets(checkout_path, runtime_env_file=runtime_env_file)
+        render_result("list", target, payload, args.json)
         return
 
     if args.command == "set":
-        secret_value = read_secret_value(args)
-        run_gh(["secret", "set", args.name, "--repo", repo_full_name], stdin_text=secret_value)
+        payload = set_repository_secret(
+            checkout_path,
+            args.name,
+            read_secret_value(args),
+            runtime_env_file=runtime_env_file,
+        )
         render_result(
-            {
-                "action": "set",
-                "repo": repo_full_name,
-                "siteName": site_name,
-                "name": args.name,
-                "message": f"Updated GitHub secret {args.name} for {repo_full_name}.",
-            },
+            "set",
+            target,
+            payload,
             args.json,
+            message=f"Updated repository secret {args.name} in {payload['envFilePath']}.",
         )
         return
 
     if args.command == "delete":
-        run_gh(["secret", "delete", args.name, "--repo", repo_full_name])
+        payload = delete_repository_secret(
+            checkout_path,
+            args.name,
+            runtime_env_file=runtime_env_file,
+        )
         render_result(
-            {
-                "action": "delete",
-                "repo": repo_full_name,
-                "siteName": site_name,
-                "name": args.name,
-                "message": f"Deleted GitHub secret {args.name} from {repo_full_name}.",
-            },
+            "delete",
+            target,
+            payload,
             args.json,
+            message=f"Deleted repository secret {args.name} from {payload['envFilePath']}.",
         )
         return
 

@@ -49,14 +49,17 @@ export type SiteDeploymentSettings = {
 
 export type GithubSecretRecord = {
   name: string;
-  updatedAt: string | null;
-  visibility: string | null;
-  numSelectedRepos: number | null;
+  configured: boolean;
+  presentInEnvFile: boolean;
+  requiredByWorkflows: string[];
 };
 
 export type GithubSecretsDocument = {
   siteName: string | null;
-  repo: string;
+  repo: string | null;
+  checkoutPath: string;
+  envFilePath: string;
+  workflowFiles: string[];
   secrets: GithubSecretRecord[];
   fetchedAt: string;
 };
@@ -64,7 +67,7 @@ export type GithubSecretsDocument = {
 export type GithubSecretMutationResult = {
   action: "set" | "delete";
   siteName: string | null;
-  repo: string;
+  repo: string | null;
   name: string;
   summary: string;
   finishedAt: string;
@@ -365,10 +368,18 @@ async function runJsonScript(
 }
 
 function parseGithubSecretsDocument(payload: JsonRecord): GithubSecretsDocument {
-  const repo = typeof payload.repo === "string" ? payload.repo.trim() : "";
-  if (!repo) {
-    throw new Error("GitHub secret response did not include a repository name.");
+  const repo = typeof payload.repo === "string" && payload.repo.trim() ? payload.repo.trim() : null;
+  const checkoutPath =
+    typeof payload.checkoutPath === "string" && payload.checkoutPath.trim() ? payload.checkoutPath.trim() : "";
+  const envFilePath =
+    typeof payload.envFilePath === "string" && payload.envFilePath.trim() ? payload.envFilePath.trim() : "";
+  if (!checkoutPath || !envFilePath) {
+    throw new Error("Repository secret response did not include checkout or env-file metadata.");
   }
+
+  const workflowFiles = Array.isArray(payload.workflowFiles)
+    ? payload.workflowFiles.filter((entry): entry is string => typeof entry === "string" && entry.trim())
+    : [];
 
   const secrets = Array.isArray(payload.secrets)
     ? payload.secrets
@@ -376,18 +387,22 @@ function parseGithubSecretsDocument(payload: JsonRecord): GithubSecretsDocument 
         .filter((entry) => typeof entry.name === "string" && entry.name.trim())
         .map((entry) => ({
           name: String(entry.name).trim(),
-          updatedAt: typeof entry.updatedAt === "string" && entry.updatedAt.trim() ? entry.updatedAt.trim() : null,
-          visibility: typeof entry.visibility === "string" && entry.visibility.trim() ? entry.visibility.trim() : null,
-          numSelectedRepos:
-            typeof entry.numSelectedRepos === "number" && Number.isFinite(entry.numSelectedRepos)
-              ? entry.numSelectedRepos
-              : null,
+          configured: entry.configured === true,
+          presentInEnvFile: entry.presentInEnvFile === true,
+          requiredByWorkflows: Array.isArray(entry.requiredByWorkflows)
+            ? entry.requiredByWorkflows.filter(
+                (item): item is string => typeof item === "string" && item.trim()
+              )
+            : [],
         }))
     : [];
 
   return {
     siteName: typeof payload.siteName === "string" && payload.siteName.trim() ? payload.siteName.trim() : null,
     repo,
+    checkoutPath,
+    envFilePath,
+    workflowFiles,
     secrets,
     fetchedAt: new Date().toISOString(),
   };
@@ -526,7 +541,7 @@ export async function setGithubSecret(
       summary:
         typeof payload.message === "string" && payload.message.trim()
           ? payload.message.trim()
-          : `Updated GitHub secret ${trimmedName}.`,
+          : `Updated repository secret ${trimmedName}.`,
       finishedAt: new Date().toISOString(),
     },
   };
@@ -551,7 +566,7 @@ export async function deleteGithubSecret(
       summary:
         typeof payload.message === "string" && payload.message.trim()
           ? payload.message.trim()
-          : `Deleted GitHub secret ${trimmedName}.`,
+          : `Deleted repository secret ${trimmedName}.`,
       finishedAt: new Date().toISOString(),
     },
   };

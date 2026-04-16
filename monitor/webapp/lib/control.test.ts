@@ -490,6 +490,7 @@ test("listGithubSecrets reads secrets for a managed site", async () => {
         name: "app",
         repo_url: "https://github.com/example/app.git",
         webhook_repo: "example/app",
+        checkout_path: "/srv/apps/app",
       },
     ]),
     "utf-8"
@@ -500,7 +501,7 @@ test("listGithubSecrets reads secrets for a managed site", async () => {
     `#!/usr/bin/env bash
 if [[ "$2" == "list" ]]; then
   cat <<'JSON'
-{"action":"list","repo":"example/app","siteName":"app","secrets":[{"name":"API_KEY","updatedAt":"2026-04-01T10:00:00Z","visibility":"private","numSelectedRepos":0}]}
+{"action":"list","repo":"example/app","siteName":"app","checkoutPath":"/srv/apps/app","envFilePath":"/srv/apps/app/.env","workflowFiles":[".github/workflows/deploy.yml"],"secrets":[{"name":"API_KEY","configured":true,"presentInEnvFile":true,"requiredByWorkflows":[".github/workflows/deploy.yml"]}]}
 JSON
   exit 0
 fi
@@ -518,7 +519,9 @@ exit 1
       const document = await listGithubSecrets("app");
       assert.equal(document.repo, "example/app");
       assert.equal(document.siteName, "app");
+      assert.equal(document.envFilePath, "/srv/apps/app/.env");
       assert.equal(document.secrets[0]?.name, "API_KEY");
+      assert.equal(document.secrets[0]?.configured, true);
     }
   );
 });
@@ -542,6 +545,7 @@ test("setGithubSecret and deleteGithubSecret refresh the secret list", async () 
         name: "app",
         repo_url: "https://github.com/example/app.git",
         webhook_repo: "example/app",
+        checkout_path: "/srv/apps/app",
       },
     ]),
     "utf-8"
@@ -553,19 +557,19 @@ test("setGithubSecret and deleteGithubSecret refresh the secret list", async () 
 printf '%s\\n' "$*" >>"${logsDir}/python3.log"
 if [[ "$2" == "set" ]]; then
   cat <<'JSON'
-{"action":"set","repo":"example/app","siteName":"app","message":"Updated GitHub secret API_KEY for example/app."}
+{"action":"set","repo":"example/app","siteName":"app","message":"Updated repository secret API_KEY in /srv/apps/app/.env."}
 JSON
   exit 0
 fi
 if [[ "$2" == "delete" ]]; then
   cat <<'JSON'
-{"action":"delete","repo":"example/app","siteName":"app","message":"Deleted GitHub secret API_KEY from example/app."}
+{"action":"delete","repo":"example/app","siteName":"app","message":"Deleted repository secret API_KEY from /srv/apps/app/.env."}
 JSON
   exit 0
 fi
 if [[ "$2" == "list" ]]; then
   cat <<'JSON'
-{"action":"list","repo":"example/app","siteName":"app","secrets":[{"name":"API_KEY","updatedAt":"2026-04-01T10:00:00Z","visibility":"private","numSelectedRepos":0}]}
+{"action":"list","repo":"example/app","siteName":"app","checkoutPath":"/srv/apps/app","envFilePath":"/srv/apps/app/.env","workflowFiles":[".github/workflows/deploy.yml"],"secrets":[{"name":"API_KEY","configured":true,"presentInEnvFile":true,"requiredByWorkflows":[".github/workflows/deploy.yml"]}]}
 JSON
   exit 0
 fi

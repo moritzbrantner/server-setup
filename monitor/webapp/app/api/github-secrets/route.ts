@@ -35,7 +35,7 @@ function parseSiteName(request: Request): string {
 
 function parseMutationBody(body: unknown): { siteName: string; name: string; value?: string } {
   if (!body || typeof body !== "object") {
-    throw new Error("Expected a GitHub secret payload.");
+    throw new Error("Expected a repository secret payload.");
   }
 
   const record = body as Record<string, unknown>;

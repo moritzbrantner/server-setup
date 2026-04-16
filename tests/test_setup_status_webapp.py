@@ -46,7 +46,6 @@ class SetupStatusWebappTests(unittest.TestCase):
         self.assertIn("STATUS_WEBAPP_HOST=0.0.0.0\n", body)
         self.assertIn("STATUS_WEBAPP_PORT=4000\n", body)
         self.assertIn("STATUS_WEBAPP_ADMIN_TOKEN=keep-me\n", body)
-        self.assertIn("STATUS_WEBAPP_GITHUB_TOKEN=\n", body)
 
     def test_write_status_webapp_env_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

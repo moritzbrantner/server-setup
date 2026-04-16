@@ -188,7 +188,7 @@ function deriveSiteDrafts(snapshot: DashboardSnapshot): Record<string, SiteDeplo
 
 function deriveGithubSecretSiteOptions(snapshot: DashboardSnapshot): GithubSecretSiteOption[] {
   return snapshot.applications
-    .filter((application) => application.repoUrl || application.webhookRepo)
+    .filter((application) => application.checkoutPath)
     .map((application) => ({
       siteName: application.name,
       repoLabel: application.webhookRepo || application.repoUrl || application.name,
@@ -312,7 +312,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
       });
     } catch (loadError) {
       const message =
-        loadError instanceof Error ? loadError.message : "Unable to load GitHub secrets.";
+        loadError instanceof Error ? loadError.message : "Unable to load repository secrets.";
       startTransition(() => {
         setGithubSecretsDocument(null);
         setGithubSecretsMessage(message);
@@ -545,7 +545,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
       return;
     }
     if (!githubSecretsSiteName) {
-      setGithubSecretsMessage("Select a site with GitHub repository metadata first.");
+      setGithubSecretsMessage("Select a deployed site first.");
       return;
     }
     if (!githubSecretDraft.name.trim()) {
@@ -584,7 +584,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
       });
     } catch (saveError) {
       const message =
-        saveError instanceof Error ? saveError.message : "Unable to save the GitHub secret.";
+        saveError instanceof Error ? saveError.message : "Unable to save the repository secret.";
       startTransition(() => {
         setGithubSecretsMessage(message);
       });
@@ -600,7 +600,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
       return;
     }
     if (!githubSecretsSiteName) {
-      setGithubSecretsMessage("Select a site with GitHub repository metadata first.");
+      setGithubSecretsMessage("Select a deployed site first.");
       return;
     }
 
@@ -629,7 +629,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
       });
     } catch (deleteError) {
       const message =
-        deleteError instanceof Error ? deleteError.message : "Unable to delete the GitHub secret.";
+        deleteError instanceof Error ? deleteError.message : "Unable to delete the repository secret.";
       startTransition(() => {
         setGithubSecretsMessage(message);
       });
@@ -992,8 +992,8 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
           <article className="admin-card">
             <div className="admin-card-head">
               <div>
-                <h3>GitHub secrets</h3>
-                <p>List, create, overwrite, and delete repository Actions secrets for a managed site.</p>
+                <h3>Repository secrets</h3>
+                <p>Scan GitHub workflow files for required secrets and store the values in the repo env file.</p>
               </div>
             </div>
             {githubSecretSiteOptions.length > 0 ? (
@@ -1020,6 +1020,10 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
                   <div className="config-meta">
                     <span>Repository</span>
                     <strong>{githubSecretsDocument?.repo || selectedGithubSecretSite?.repoLabel || "n/a"}</strong>
+                  </div>
+                  <div className="config-meta">
+                    <span>Env file</span>
+                    <strong>{githubSecretsDocument?.envFilePath || "Loading..."}</strong>
                   </div>
                   <label className="token-field">
                     <span>Secret name</span>
@@ -1072,22 +1076,39 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
                   </div>
                 </div>
                 <p className="inline-note">
-                  GitHub does not return secret values. Saving an existing name overwrites it in
-                  place.
+                  Workflow references are discovered from `.github/workflows/*.yml` and
+                  `.github/workflows/*.yaml`. Saving a name writes it to the repo env file without
+                  showing the stored value back.
                 </p>
+                {githubSecretsDocument?.workflowFiles.length ? (
+                  <p className="inline-note">
+                    Workflow files: {githubSecretsDocument.workflowFiles.join(", ")}
+                  </p>
+                ) : (
+                  <p className="inline-note">
+                    No workflow files were found. Existing env-file keys are still editable here.
+                  </p>
+                )}
                 {githubSecretsMessage ? <p className="inline-note">{githubSecretsMessage}</p> : null}
                 <div className="alert-list">
                   {githubSecretsDocument?.secrets.length ? (
                     githubSecretsDocument.secrets.map((secret) => (
-                      <article className="alert-card alert-ok" key={`${githubSecretsDocument.repo}-${secret.name}`}>
+                      <article
+                        className={`alert-card ${secret.configured ? "alert-ok" : "alert-warning"}`}
+                        key={`${githubSecretsDocument.envFilePath}-${secret.name}`}
+                      >
                         <div className="alert-head">
                           <div>
                             <h3>{secret.name}</h3>
-                            <p>Updated {formatTimestamp(secret.updatedAt)}</p>
+                            <p>
+                              {secret.requiredByWorkflows.length > 0
+                                ? `Required by ${secret.requiredByWorkflows.join(", ")}`
+                                : "Only present in the env file"}
+                            </p>
                           </div>
                           <div className="button-row">
-                            <mark className={pillTone(secret.visibility || "unknown")}>
-                              {secret.visibility || "private"}
+                            <mark className={pillTone(secret.configured ? "ok" : "warning")}>
+                              {secret.configured ? "configured" : "missing"}
                             </mark>
                             <button
                               className="ghost-button"
@@ -1105,8 +1126,8 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
                     <article className="alert-card alert-ok">
                       <div className="alert-head">
                         <div>
-                          <h3>No GitHub secrets yet</h3>
-                          <p>Create a repository secret here, then use it in your GitHub workflows.</p>
+                          <h3>No repository secrets yet</h3>
+                          <p>Add a secret above or commit workflow files that reference `secrets.*` values.</p>
                         </div>
                         <mark className={pillTone("unknown")}>empty</mark>
                       </div>
@@ -1116,7 +1137,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
               </>
             ) : (
               <p className="inline-note">
-                No deployed site currently exposes GitHub repository metadata in the active status source.
+                No deployed site currently exposes checkout metadata in the active status source.
               </p>
             )}
           </article>

@@ -134,6 +134,7 @@ test("dashboard renders important issues and setup details", () => {
         lastHealthMessage: "health endpoint timed out",
         lastDeployTimestamp: "2026-03-31T11:58:00Z",
         tlsDomains: ["api.example.com"],
+        checkoutPath: "/srv/apps/api",
         ok: false,
         statusCode: 503,
         latencyMs: 25,
@@ -153,7 +154,7 @@ test("dashboard renders important issues and setup details", () => {
   assert.match(markup, /Restart Nginx/);
   assert.match(markup, /Reload Nginx/);
   assert.match(markup, /Add website/);
-  assert.match(markup, /GitHub secrets/);
+  assert.match(markup, /Repository secrets/);
   assert.match(markup, /Push to Main/);
   assert.match(markup, /Retry deploy/);
   assert.match(markup, /The repository must already include a valid root `server\.conf`\./);

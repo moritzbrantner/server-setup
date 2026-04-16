@@ -6,11 +6,10 @@ import importlib.util
 import io
 import json
 import pathlib
-import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
@@ -33,9 +32,16 @@ class ManageGithubSecretsTests(unittest.TestCase):
     def test_normalize_repo_full_name_accepts_direct_repo_name(self) -> None:
         self.assertEqual(self.module.normalize_repo_full_name("example/app"), "example/app")
 
-    def test_main_lists_secrets_for_registry_site(self) -> None:
+    def test_main_lists_workflow_secrets_for_registry_site(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry_path = pathlib.Path(tmp) / "registry.json"
+            checkout = Path(tmp) / "app"
+            (checkout / ".github" / "workflows").mkdir(parents=True)
+            (checkout / ".github" / "workflows" / "deploy.yml").write_text(
+                "env:\n  TOKEN: ${{ secrets.API_TOKEN }}\n",
+                encoding="utf-8",
+            )
+            (checkout / ".env").write_text("API_TOKEN=present\n", encoding="utf-8")
+            registry_path = Path(tmp) / "registry.json"
             registry_path.write_text(
                 json.dumps(
                     [
@@ -43,6 +49,7 @@ class ManageGithubSecretsTests(unittest.TestCase):
                             "name": "app",
                             "repo_url": "https://github.com/example/app.git",
                             "webhook_repo": "example/app",
+                            "checkout_path": str(checkout),
                         }
                     ]
                 ),
@@ -50,9 +57,7 @@ class ManageGithubSecretsTests(unittest.TestCase):
             )
 
             stdout = io.StringIO()
-            with patch.object(
-                sys,
-                "argv",
+            with patch_argv(
                 [
                     "manage_github_secrets.py",
                     "list",
@@ -61,86 +66,95 @@ class ManageGithubSecretsTests(unittest.TestCase):
                     "--config",
                     str(registry_path),
                     "--json",
-                ],
+                ]
             ):
-                with patch.object(self.module, "shutil_which", return_value="/usr/bin/gh"):
-                    with patch.object(
-                        self.module.subprocess,
-                        "run",
-                        return_value=subprocess.CompletedProcess(
-                            ["gh", "secret", "list"],
-                            0,
-                            stdout='[{"name":"API_KEY","updatedAt":"2026-04-01T10:00:00Z","visibility":"private","numSelectedRepos":0}]',
-                            stderr="",
-                        ),
-                    ):
-                        with contextlib.redirect_stdout(stdout):
-                            self.module.main()
+                with contextlib.redirect_stdout(stdout):
+                    self.module.main()
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["repo"], "example/app")
         self.assertEqual(payload["siteName"], "app")
-        self.assertEqual(payload["secrets"][0]["name"], "API_KEY")
+        self.assertEqual(payload["envFilePath"], str(checkout / ".env"))
+        self.assertEqual(payload["secrets"][0]["name"], "API_TOKEN")
+        self.assertEqual(payload["secrets"][0]["requiredByWorkflows"], [".github/workflows/deploy.yml"])
 
-    def test_main_sets_secret_with_stdin_body(self) -> None:
-        calls: list[dict[str, object]] = []
+    def test_main_sets_secret_in_repository_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp) / "app"
+            checkout.mkdir()
 
-        def fake_run(cmd, **kwargs):
-            calls.append({"cmd": cmd, "input": kwargs.get("input")})
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        stdout = io.StringIO()
-        with patch.object(
-            sys,
-            "argv",
-            [
-                "manage_github_secrets.py",
-                "set",
-                "TOKEN",
-                "--repo",
-                "example/app",
-                "--value",
-                "super-secret",
-            ],
-        ):
-            with patch.object(self.module, "shutil_which", return_value="/usr/bin/gh"):
-                with patch.object(self.module.subprocess, "run", side_effect=fake_run):
-                    with contextlib.redirect_stdout(stdout):
-                        self.module.main()
-
-        self.assertEqual(
-            calls[0]["cmd"],
-            ["gh", "secret", "set", "TOKEN", "--repo", "example/app"],
-        )
-        self.assertEqual(calls[0]["input"], "super-secret")
-        self.assertIn("Updated GitHub secret TOKEN", stdout.getvalue())
-
-    def test_main_deletes_secret_for_repo_url(self) -> None:
-        calls: list[list[str]] = []
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        with patch.object(
-            sys,
-            "argv",
-            [
-                "manage_github_secrets.py",
-                "delete",
-                "TOKEN",
-                "--repo",
-                "https://github.com/example/app.git",
-            ],
-        ):
-            with patch.object(self.module, "shutil_which", return_value="/usr/bin/gh"):
-                with patch.object(self.module.subprocess, "run", side_effect=fake_run):
+            stdout = io.StringIO()
+            with patch_argv(
+                [
+                    "manage_github_secrets.py",
+                    "set",
+                    "TOKEN",
+                    "--checkout",
+                    str(checkout),
+                    "--value",
+                    "super-secret",
+                ]
+            ):
+                with contextlib.redirect_stdout(stdout):
                     self.module.main()
 
-        self.assertEqual(
-            calls[0],
-            ["gh", "secret", "delete", "TOKEN", "--repo", "example/app"],
-        )
+            body = (checkout / ".env").read_text(encoding="utf-8")
+
+        self.assertIn("TOKEN=super-secret\n", body)
+        self.assertIn("Updated repository secret TOKEN", stdout.getvalue())
+
+    def test_main_deletes_secret_from_repo_url_registry_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp) / "app"
+            checkout.mkdir()
+            (checkout / ".env").write_text("TOKEN=present\n", encoding="utf-8")
+            registry_path = Path(tmp) / "registry.json"
+            registry_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "app",
+                            "repo_url": "https://github.com/example/app.git",
+                            "webhook_repo": "example/app",
+                            "checkout_path": str(checkout),
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch_argv(
+                [
+                    "manage_github_secrets.py",
+                    "delete",
+                    "TOKEN",
+                    "--repo",
+                    "https://github.com/example/app.git",
+                    "--config",
+                    str(registry_path),
+                ]
+            ):
+                self.module.main()
+
+            body = (checkout / ".env").read_text(encoding="utf-8")
+
+        self.assertEqual(body, "")
+
+
+class patch_argv(contextlib.AbstractContextManager):
+    def __init__(self, value: list[str]) -> None:
+        self._value = value
+        self._previous: list[str] | None = None
+
+    def __enter__(self):
+        self._previous = sys.argv[:]
+        sys.argv = self._value
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        assert self._previous is not None
+        sys.argv = self._previous
+        return False
 
 
 if __name__ == "__main__":

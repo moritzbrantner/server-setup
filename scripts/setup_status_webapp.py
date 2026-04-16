@@ -103,7 +103,6 @@ def render_status_webapp_env(root_dir: str, host: str, port: str, admin_token: s
         f"STATUS_WEBAPP_HOST={host}\n"
         f"STATUS_WEBAPP_PORT={port}\n"
         f"STATUS_WEBAPP_ADMIN_TOKEN={admin_token}\n"
-        "STATUS_WEBAPP_GITHUB_TOKEN=\n"
     )
 
 
@@ -168,7 +167,6 @@ def write_status_webapp_env(env_file: Path, root_dir: str, host: str, port: str)
             "STATUS_WEBAPP_HOST": host,
             "STATUS_WEBAPP_PORT": port,
             "STATUS_WEBAPP_ADMIN_TOKEN": existing.get("STATUS_WEBAPP_ADMIN_TOKEN", ""),
-            "STATUS_WEBAPP_GITHUB_TOKEN": existing.get("STATUS_WEBAPP_GITHUB_TOKEN", ""),
         },
     )
 
