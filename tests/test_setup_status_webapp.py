@@ -47,6 +47,18 @@ class SetupStatusWebappTests(unittest.TestCase):
         self.assertIn("STATUS_WEBAPP_PORT=4000\n", body)
         self.assertIn("STATUS_WEBAPP_ADMIN_TOKEN=keep-me\n", body)
 
+    def test_write_status_webapp_env_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = pathlib.Path(tmp) / "server-setup-status-webapp"
+
+            self.module.write_status_webapp_env(env_file, "/srv/server-setup", "0.0.0.0", "4000")
+            first = env_file.read_text(encoding="utf-8")
+
+            self.module.write_status_webapp_env(env_file, "/srv/server-setup", "0.0.0.0", "4000")
+            second = env_file.read_text(encoding="utf-8")
+
+        self.assertEqual(first, second)
+
 
 if __name__ == "__main__":
     unittest.main()
