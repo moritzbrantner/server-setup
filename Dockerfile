@@ -49,7 +49,6 @@ RUN apt-get update \
 COPY . /opt/server-setup
 
 RUN chmod +x \
-    /opt/server-setup/scripts/*.sh \
     /opt/server-setup/tests/*.sh \
     /opt/server-setup/benchmarks/*.sh \
  && mkdir -p \
@@ -100,6 +99,6 @@ EXPOSE 22 80 443 4000 4001 4002 4003
 
 STOPSIGNAL SIGRTMIN+3
 
-ENTRYPOINT ["/opt/server-setup/scripts/sandbox-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/env", "python3", "/opt/server-setup/scripts/sandbox_entrypoint.py"]
 
 CMD ["/sbin/init"]

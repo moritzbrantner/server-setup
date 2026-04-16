@@ -19,7 +19,15 @@ export type DashboardActionRequest =
   | { action: "restart-webhook" }
   | { action: "restart-status-webapp" }
   | { action: "restart-site-service"; siteName: string }
-  | { action: "retry-deploy"; siteName: string };
+  | { action: "retry-deploy"; siteName: string }
+  | {
+      action: "add-site";
+      repoUrl: string;
+      branch: string;
+      checkoutPath: string;
+      email: string;
+      skipGithubHook: boolean;
+    };
 
 export type DashboardActionResult = {
   action: DashboardActionRequest["action"];
@@ -38,6 +46,10 @@ export type SiteDeploymentSettings = {
 };
 
 type JsonRecord = Record<string, unknown>;
+type CommandOptions = {
+  timeout?: number;
+  env?: NodeJS.ProcessEnv;
+};
 
 function repoRoot(): string {
   return process.env.SERVER_SETUP_ROOT || path.resolve(process.cwd(), "..", "..");
@@ -144,6 +156,13 @@ function readSiteName(value: unknown): string {
   return value.trim();
 }
 
+function readRepoUrl(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("A non-empty repository URL is required.");
+  }
+  return value.trim();
+}
+
 function asRecord(value: unknown): JsonRecord {
   return typeof value === "object" && value !== null ? (value as JsonRecord) : {};
 }
@@ -175,13 +194,14 @@ async function runCommand(
   args: string[],
   successSummary: string,
   target: string | null,
-  timeout = 15 * 60 * 1000
+  options: CommandOptions = {}
 ): Promise<DashboardActionResult> {
   try {
     const { stdout = "", stderr = "" } = await execFileAsync(command, args, {
       cwd: repoRoot(),
-      timeout,
+      timeout: options.timeout ?? 15 * 60 * 1000,
       maxBuffer: 1024 * 1024,
+      env: options.env,
     });
     return {
       action: "reload-nginx",
@@ -211,13 +231,31 @@ async function runTypedCommand(
   args: string[],
   successSummary: string,
   target: string | null,
-  timeout?: number
+  options?: CommandOptions
 ): Promise<DashboardActionResult> {
-  const result = await runCommand(command, args, successSummary, target, timeout);
+  const result = await runCommand(command, args, successSummary, target, options);
   return {
     ...result,
     action,
   };
+}
+
+async function resolveDeployRegistryPath(): Promise<string> {
+  const configPath = await defaultConfigPath();
+  const payload = (await pathExists(configPath)) ? await readJsonFile(configPath) : [];
+  const configKind = inferConfigKind(payload, configPath);
+
+  if (configKind === "registry") {
+    return configPath;
+  }
+
+  if (process.env.STATUS_CONFIG_PATH?.trim()) {
+    throw new Error(
+      "Website creation requires the deploy registry as the active status source. Point STATUS_CONFIG_PATH at deploy/registry.json or remove the override."
+    );
+  }
+
+  return resolveRepoPath("deploy/registry.json");
 }
 
 export async function readEditableConfig(): Promise<EditableConfigDocument> {
@@ -381,6 +419,43 @@ export async function runDashboardAction(
         ],
         `Deploy retry finished for ${siteName}.`,
         siteName
+      );
+      break;
+    }
+    case "add-site": {
+      const repoUrl = readRepoUrl(request.repoUrl);
+      const branch = request.branch.trim();
+      const checkoutPath = request.checkoutPath.trim();
+      const email = request.email.trim();
+      const registryPath = await resolveDeployRegistryPath();
+
+      const args = [resolveRepoPath("scripts/deploy_repo.py"), "--repo-url", repoUrl];
+      if (checkoutPath) {
+        args.push("--dest", checkoutPath);
+      }
+      if (branch) {
+        args.push("--branch", branch);
+      }
+      if (email) {
+        args.push("--email", email);
+      }
+      if (request.skipGithubHook) {
+        args.push("--skip-github-hook");
+      }
+
+      result = await runTypedCommand(
+        "add-site",
+        "python3",
+        args,
+        "Website deployment finished.",
+        repoUrl,
+        {
+          timeout: 30 * 60 * 1000,
+          env: {
+            ...process.env,
+            REGISTRY_PATH: registryPath,
+          },
+        }
       );
       break;
     }

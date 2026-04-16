@@ -34,6 +34,7 @@ class PrepareServerTests(unittest.TestCase):
                 email="ops@example.com",
                 skip_docker=True,
                 skip_hardening=True,
+                with_ssh_hardening=False,
                 with_status_webapp=True,
             )
 
@@ -48,8 +49,8 @@ class PrepareServerTests(unittest.TestCase):
 
         run_checked.assert_has_calls(
             [
-                call(["bash", str(root / "scripts/ensure-server-tools.sh"), "--skip-docker"], cwd=root),
-                call(["bash", str(root / "scripts/setup-status-webapp.sh"), "--root", str(root)], cwd=root),
+                call(["python3", str(root / "scripts/ensure_server_tools.py"), "--skip-docker"], cwd=root),
+                call(["python3", str(root / "scripts/setup_status_webapp.py"), "--root", str(root)], cwd=root),
             ]
         )
 
@@ -60,6 +61,7 @@ class PrepareServerTests(unittest.TestCase):
                 email="ops@example.com",
                 skip_docker=True,
                 skip_hardening=True,
+                with_ssh_hardening=False,
                 with_status_webapp=False,
             )
 
@@ -72,8 +74,62 @@ class PrepareServerTests(unittest.TestCase):
                                     with patch.object(self.module, "run_checked") as run_checked:
                                         self.module.main()
 
-        status_installer = ["bash", str(root / "scripts/setup-status-webapp.sh"), "--root", str(root)]
+        status_installer = ["python3", str(root / "scripts/setup_status_webapp.py"), "--root", str(root)]
         self.assertNotIn(call(status_installer, cwd=root), run_checked.mock_calls)
+
+    def test_default_hardening_keeps_ssh_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            args = argparse.Namespace(
+                email="ops@example.com",
+                skip_docker=True,
+                skip_hardening=False,
+                with_ssh_hardening=False,
+                with_status_webapp=False,
+            )
+
+            with patch.object(self.module, "parse_args", return_value=args):
+                with patch.object(self.module, "require_root"):
+                    with patch.object(self.module, "repo_root", return_value=root):
+                        with patch.object(self.module, "load_env_file", return_value={}):
+                            with patch.object(self.module, "setup_automation_units"):
+                                with patch.object(self.module, "update_env_file"):
+                                    with patch.object(self.module, "run_checked") as run_checked:
+                                        self.module.main()
+
+        self.assertIn(
+            call(["python3", str(root / "scripts/harden_server.py")], cwd=root),
+            run_checked.mock_calls,
+        )
+        self.assertNotIn(
+            call(["python3", str(root / "scripts/harden_server.py"), "--configure-ssh"], cwd=root),
+            run_checked.mock_calls,
+        )
+
+    def test_explicit_ssh_hardening_passes_opt_in_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            args = argparse.Namespace(
+                email="ops@example.com",
+                skip_docker=True,
+                skip_hardening=False,
+                with_ssh_hardening=True,
+                with_status_webapp=False,
+            )
+
+            with patch.object(self.module, "parse_args", return_value=args):
+                with patch.object(self.module, "require_root"):
+                    with patch.object(self.module, "repo_root", return_value=root):
+                        with patch.object(self.module, "load_env_file", return_value={}):
+                            with patch.object(self.module, "setup_automation_units"):
+                                with patch.object(self.module, "update_env_file"):
+                                    with patch.object(self.module, "run_checked") as run_checked:
+                                        self.module.main()
+
+        self.assertIn(
+            call(["python3", str(root / "scripts/harden_server.py"), "--configure-ssh"], cwd=root),
+            run_checked.mock_calls,
+        )
 
 
 if __name__ == "__main__":

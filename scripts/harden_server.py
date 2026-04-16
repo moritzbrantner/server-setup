@@ -23,8 +23,13 @@ def die(message: str) -> None:
     raise SystemExit(1)
 
 
-def run_checked(cmd: list[str], allow_fail: bool = False) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(cmd, text=True, capture_output=True, check=False)
+def run_checked(
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    allow_fail: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(cmd, text=True, capture_output=True, env=env, check=False)
     if result.stdout:
         sys.stdout.write(result.stdout)
     if result.stderr:
@@ -42,7 +47,7 @@ def require_root() -> None:
 def install_pkgs(packages: list[str]) -> None:
     env = os.environ.copy()
     env["DEBIAN_FRONTEND"] = "noninteractive"
-    run_checked(["apt-get", "install", "-y", *packages],)
+    run_checked(["apt-get", "install", "-y", *packages], env=env)
 
 
 def restart_or_enable_service(service_name: str) -> None:
@@ -82,7 +87,7 @@ def write_sshd_hardening_config() -> None:
     cfg = Path("/etc/ssh/sshd_config.d/99-server-setup-hardening.conf")
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text(
-        "# Managed by scripts/harden-server.sh\n"
+        "# Managed by scripts/harden_server.py\n"
         "Protocol 2\n"
         "PasswordAuthentication no\n"
         "KbdInteractiveAuthentication no\n"
@@ -161,14 +166,22 @@ def configure_ufw() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Configure baseline host hardening.")
-    parser.parse_args()
+    parser.add_argument(
+        "--configure-ssh",
+        action="store_true",
+        help="Also manage sshd settings. Default behavior leaves SSH unchanged.",
+    )
+    args = parser.parse_args()
     require_root()
     if shutil.which("apt-get") is None:
         die("This script currently supports apt-based systems only.")
     log("Refreshing apt package index")
     run_checked(["apt-get", "update", "-y"])
-    ensure_safe_to_disable_password_auth()
-    write_sshd_hardening_config()
+    if args.configure_ssh:
+        ensure_safe_to_disable_password_auth()
+        write_sshd_hardening_config()
+    else:
+        log("Leaving SSH configuration unchanged. Re-run with --configure-ssh to manage sshd settings.")
     configure_unattended_upgrades()
     configure_fail2ban()
     configure_ufw()

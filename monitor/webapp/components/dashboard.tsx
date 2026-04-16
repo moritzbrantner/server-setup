@@ -22,6 +22,22 @@ type DashboardProps = {
   adminControlsEnabled: boolean;
 };
 
+type NewSiteDraft = {
+  repoUrl: string;
+  branch: string;
+  checkoutPath: string;
+  email: string;
+  skipGithubHook: boolean;
+};
+
+const EMPTY_NEW_SITE_DRAFT: NewSiteDraft = {
+  repoUrl: "",
+  branch: "",
+  checkoutPath: "",
+  email: "",
+  skipGithubHook: false,
+};
+
 function formatMetric(value: number | null, suffix = ""): string {
   if (value === null || Number.isNaN(value)) {
     return "n/a";
@@ -119,6 +135,8 @@ function actionLabel(action: DashboardActionRequest["action"]): string {
       return "Restart service";
     case "retry-deploy":
       return "Retry deploy";
+    case "add-site":
+      return "Add website";
   }
 }
 
@@ -168,6 +186,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     deriveSiteDrafts(initialSnapshot)
   );
   const [siteSaveKey, setSiteSaveKey] = useState<string | null>(null);
+  const [newSiteDraft, setNewSiteDraft] = useState<NewSiteDraft>(EMPTY_NEW_SITE_DRAFT);
 
   const refreshSnapshot = useEffectEvent(async () => {
     try {
@@ -317,8 +336,13 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
       const payload = (await response.json()) as {
         result: DashboardActionResult;
         snapshot: DashboardSnapshot;
+        config?: EditableConfigDocument;
       };
       startTransition(() => {
+        if (payload.config) {
+          setConfigDocument(payload.config);
+          setConfigDraft(payload.config.raw);
+        }
         setSnapshot(payload.snapshot);
         setSiteDrafts(deriveSiteDrafts(payload.snapshot));
         setActionResult(payload.result);
@@ -328,6 +352,76 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     } catch (actionError) {
       const message =
         actionError instanceof Error ? actionError.message : "Unable to execute the requested action.";
+      startTransition(() => {
+        setAdminMessage(message);
+      });
+    } finally {
+      setBusyActionKey(null);
+    }
+  });
+
+  const updateNewSiteDraft = useEffectEvent(
+    (field: keyof Omit<NewSiteDraft, "skipGithubHook">, value: string) => {
+      setNewSiteDraft((current) => ({
+        ...current,
+        [field]: value,
+      }));
+    }
+  );
+
+  const setNewSiteSkipGithubHook = useEffectEvent((checked: boolean) => {
+    setNewSiteDraft((current) => ({
+      ...current,
+      skipGithubHook: checked,
+    }));
+  });
+
+  const createSite = useEffectEvent(async () => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+
+    if (!newSiteDraft.repoUrl.trim()) {
+      setAdminMessage("Repository URL is required to deploy a website.");
+      return;
+    }
+
+    setBusyActionKey("add-site");
+    try {
+      const response = await fetch("/api/actions", {
+        method: "POST",
+        headers: adminHeaders(trimmedToken),
+        body: JSON.stringify({
+          action: "add-site",
+          ...newSiteDraft,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const payload = (await response.json()) as {
+        result: DashboardActionResult;
+        snapshot: DashboardSnapshot;
+        config?: EditableConfigDocument;
+      };
+      startTransition(() => {
+        if (payload.config) {
+          setConfigDocument(payload.config);
+          setConfigDraft(payload.config.raw);
+        }
+        setSnapshot(payload.snapshot);
+        setSiteDrafts(deriveSiteDrafts(payload.snapshot));
+        setActionResult(payload.result);
+        setNewSiteDraft(EMPTY_NEW_SITE_DRAFT);
+        setAdminMessage(null);
+        setError(null);
+      });
+    } catch (createError) {
+      const message =
+        createError instanceof Error ? createError.message : "Unable to deploy the new website.";
       startTransition(() => {
         setAdminMessage(message);
       });
@@ -573,6 +667,98 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
                 <p>{actionResult.summary}</p>
                 {actionResult.output ? <pre>{actionResult.output}</pre> : null}
               </div>
+            ) : null}
+          </article>
+
+          <article className="admin-card">
+            <div className="admin-card-head">
+              <div>
+                <h3>Add website</h3>
+                <p>
+                  Deploy a new repository through the same `deploy-repo` workflow used on the shell.
+                </p>
+              </div>
+            </div>
+            <div className="token-form">
+              <label className="token-field">
+                <span>Repository URL</span>
+                <input
+                  disabled={!adminUnlocked || busyActionKey !== null}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    updateNewSiteDraft("repoUrl", event.target.value)
+                  }
+                  placeholder="git@github.com:your-org/your-app.git"
+                  type="text"
+                  value={newSiteDraft.repoUrl}
+                />
+              </label>
+              <label className="token-field">
+                <span>Tracked branch</span>
+                <input
+                  disabled={!adminUnlocked || busyActionKey !== null}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    updateNewSiteDraft("branch", event.target.value)
+                  }
+                  placeholder="main"
+                  type="text"
+                  value={newSiteDraft.branch}
+                />
+              </label>
+              <label className="token-field">
+                <span>Checkout path</span>
+                <input
+                  disabled={!adminUnlocked || busyActionKey !== null}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    updateNewSiteDraft("checkoutPath", event.target.value)
+                  }
+                  placeholder="/srv/apps/your-app"
+                  type="text"
+                  value={newSiteDraft.checkoutPath}
+                />
+              </label>
+              <label className="token-field">
+                <span>TLS email override</span>
+                <input
+                  disabled={!adminUnlocked || busyActionKey !== null}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    updateNewSiteDraft("email", event.target.value)
+                  }
+                  placeholder="ops@example.com"
+                  type="email"
+                  value={newSiteDraft.email}
+                />
+              </label>
+              <label className="toggle-field">
+                <input
+                  checked={newSiteDraft.skipGithubHook}
+                  disabled={!adminUnlocked || busyActionKey !== null}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    setNewSiteSkipGithubHook(event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                <span>Skip GitHub webhook setup</span>
+              </label>
+              <div className="button-row">
+                <button
+                  className="primary-button"
+                  disabled={!adminUnlocked || busyActionKey !== null || !newSiteDraft.repoUrl.trim()}
+                  onClick={() => void createSite()}
+                  type="button"
+                >
+                  {busyActionKey === "add-site" ? "Deploying..." : "Deploy website"}
+                </button>
+              </div>
+            </div>
+            <p className="inline-note">
+              The repository must already include a valid root `server.conf`. Blank branch, path, and
+              email fields fall back to the existing deploy defaults.
+            </p>
+            {configDocument?.kind === "monitor" ? (
+              <p className="inline-note">
+                The first successful deployment will create `deploy/registry.json` and switch the
+                dashboard over to the deploy registry.
+              </p>
             ) : null}
           </article>
         </div>

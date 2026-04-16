@@ -149,8 +149,10 @@ test("dashboard renders important issues and setup details", () => {
 
   assert.match(markup, /What needs attention/);
   assert.match(markup, /Config and recovery controls/);
+  assert.match(markup, /Add website/);
   assert.match(markup, /Push to Main/);
   assert.match(markup, /Retry deploy/);
+  assert.match(markup, /The repository must already include a valid root `server\.conf`\./);
   assert.match(markup, /Automation: Apps watcher/);
   assert.match(markup, /Bootstrap and operations signals/);
   assert.match(markup, /api\.service \(failed\)/);
