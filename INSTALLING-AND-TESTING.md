@@ -37,7 +37,7 @@ Run only the status webapp tests:
 Run the self-check wrapper:
 
 ```bash
-./scripts/run-self-checks.sh
+python3 ./scripts/run_self_checks.py
 ```
 
 ## Docker sandbox
@@ -69,9 +69,9 @@ cd /opt/server-setup
 Useful sandbox commands:
 
 ```bash
-./scripts/prepare-server.sh --email admin@example.com --skip-docker
-./scripts/deploy-repo.sh --repo-url /srv/apps/simple-site --dest /srv/apps/simple-site --email admin@example.com --skip-github-hook
-./scripts/manage-services.sh
+python3 ./scripts/prepare_server.py --email admin@example.com --skip-docker
+python3 ./scripts/deploy_repo.py --repo-url /srv/apps/simple-site --dest /srv/apps/simple-site --email admin@example.com --skip-github-hook
+python3 ./scripts/manage_services.py
 ```
 
 ## Examples

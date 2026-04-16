@@ -34,7 +34,7 @@ mkdir -p "$tmp/apps/server-setup-bench"
   "domain": "bench.local",
   "build_output": ".",
   "deploy_hooks": {
-    "build": "./scripts/run-self-checks.sh"
+    "build": "python3 ./scripts/run_self_checks.py"
   },
   "runtime": {
     "mode": "static"

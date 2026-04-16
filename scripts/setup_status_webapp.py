@@ -10,6 +10,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from simple_setup_common import load_env_file, update_env_file
+
 DEFAULT_BUN_INSTALL = "/root/.bun"
 
 
@@ -94,13 +96,13 @@ def ensure_bun() -> None:
         raise SystemExit("Bun is still unavailable after installation.")
 
 
-def render_status_webapp_env(root_dir: str, host: str, port: str) -> str:
+def render_status_webapp_env(root_dir: str, host: str, port: str, admin_token: str = "") -> str:
     return (
         f"SERVER_SETUP_ROOT={root_dir}\n"
         f"BUN_INSTALL={DEFAULT_BUN_INSTALL}\n"
         f"STATUS_WEBAPP_HOST={host}\n"
         f"STATUS_WEBAPP_PORT={port}\n"
-        "STATUS_WEBAPP_ADMIN_TOKEN=\n"
+        f"STATUS_WEBAPP_ADMIN_TOKEN={admin_token}\n"
     )
 
 
@@ -118,7 +120,7 @@ def render_status_webapp_service(root_dir: str, env_file: str) -> str:
         "Environment=STATUS_WEBAPP_HOST=0.0.0.0\n"
         "Environment=STATUS_WEBAPP_PORT=4000\n"
         f"WorkingDirectory={root_dir}/monitor/webapp\n"
-        f"ExecStart=/usr/bin/env bash {root_dir}/scripts/start-status-webapp.sh\n"
+        f"ExecStart=/usr/bin/env python3 {root_dir}/scripts/start_status_webapp.py\n"
         "Restart=always\n"
         "RestartSec=2\n\n"
         "[Install]\n"
@@ -155,6 +157,20 @@ def wait_for_status_webapp(port: str) -> None:
     raise SystemExit(f"Monitoring webapp did not answer on port {port} within the expected time.")
 
 
+def write_status_webapp_env(env_file: Path, root_dir: str, host: str, port: str) -> None:
+    existing = load_env_file(env_file)
+    update_env_file(
+        env_file,
+        {
+            "SERVER_SETUP_ROOT": root_dir,
+            "BUN_INSTALL": DEFAULT_BUN_INSTALL,
+            "STATUS_WEBAPP_HOST": host,
+            "STATUS_WEBAPP_PORT": port,
+            "STATUS_WEBAPP_ADMIN_TOKEN": existing.get("STATUS_WEBAPP_ADMIN_TOKEN", ""),
+        },
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build and install the status webapp service.")
     parser.add_argument("--root", default=str(Path(__file__).resolve().parent.parent))
@@ -166,7 +182,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     root_dir = str(Path(args.root).resolve())
-    env_file = "/etc/default/server-setup-status-webapp"
+    env_file = Path("/etc/default/server-setup-status-webapp")
     service_name = "server-setup-status-webapp.service"
     service_path = Path("/etc/systemd/system") / service_name
     webapp_dir = Path(root_dir) / "monitor/webapp"
@@ -177,7 +193,7 @@ def main() -> None:
         print(render_status_webapp_env(root_dir, status_host, status_port), end="")
         return
     if args.render_service:
-        print(render_status_webapp_service(root_dir, env_file), end="")
+        print(render_status_webapp_service(root_dir, str(env_file)), end="")
         return
 
     require_root()
@@ -186,8 +202,8 @@ def main() -> None:
     install_pkgs(["ca-certificates", "curl", "unzip"])
     ensure_bun()
     build_status_webapp(webapp_dir)
-    Path(env_file).write_text(render_status_webapp_env(root_dir, status_host, status_port), encoding="utf-8")
-    service_path.write_text(render_status_webapp_service(root_dir, env_file), encoding="utf-8")
+    write_status_webapp_env(env_file, root_dir, status_host, status_port)
+    service_path.write_text(render_status_webapp_service(root_dir, str(env_file)), encoding="utf-8")
     enable_service(service_name)
     wait_for_status_webapp(status_port)
 

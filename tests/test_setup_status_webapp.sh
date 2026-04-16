@@ -26,7 +26,7 @@ test_render_status_webapp_service_restarts_on_failure() {
   grep -Fq 'EnvironmentFile=-/etc/default/server-setup-status-webapp' <<<"$unit"
   grep -Fq 'Environment=BUN_INSTALL=/root/.bun' <<<"$unit"
   grep -Fq "WorkingDirectory=$ROOT_DIR/monitor/webapp" <<<"$unit"
-  grep -Fq "ExecStart=/usr/bin/env bash $ROOT_DIR/scripts/start-status-webapp.sh" <<<"$unit"
+  grep -Fq "ExecStart=/usr/bin/env python3 $ROOT_DIR/scripts/start_status_webapp.py" <<<"$unit"
   grep -Fq 'Environment=STATUS_WEBAPP_PORT=4000' <<<"$unit"
   grep -Fq 'Restart=always' <<<"$unit"
 }

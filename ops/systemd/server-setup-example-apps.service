@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 Environment=EXAMPLE_APPS_DIR=/srv/apps
-ExecStart=/usr/bin/env bash /opt/server-setup/scripts/start-example-apps.sh
+ExecStart=/usr/bin/env python3 /opt/server-setup/scripts/start_example_apps.py
 RemainAfterExit=yes
 
 [Install]

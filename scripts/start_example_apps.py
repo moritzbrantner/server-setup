@@ -33,8 +33,8 @@ def main() -> None:
     for repo_dir in sorted(path for path in apps_dir.iterdir() if (path / "server.conf").is_file()):
         subprocess.run(
             [
-                "bash",
-                str(root_dir / "scripts/deploy-repo.sh"),
+                "python3",
+                str(root_dir / "scripts/deploy_repo.py"),
                 "--repo-url",
                 str(repo_dir),
                 "--dest",

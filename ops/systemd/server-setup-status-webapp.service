@@ -11,7 +11,7 @@ Environment=BUN_INSTALL=/root/.bun
 Environment=STATUS_WEBAPP_HOST=0.0.0.0
 Environment=STATUS_WEBAPP_PORT=4000
 WorkingDirectory=/opt/server-setup/monitor/webapp
-ExecStart=/usr/bin/env bash /opt/server-setup/scripts/start-status-webapp.sh
+ExecStart=/usr/bin/env python3 /opt/server-setup/scripts/start_status_webapp.py
 Restart=always
 RestartSec=2
 

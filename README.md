@@ -16,7 +16,7 @@ The committed [`deploy/registry.example.json`](deploy/registry.example.json) fil
 ## Prepare the server
 
 ```bash
-sudo ./scripts/prepare-server.sh \
+sudo python3 ./scripts/prepare_server.py \
   --email ops@example.com \
   --skip-docker \
   --with-status-webapp
@@ -24,10 +24,12 @@ sudo ./scripts/prepare-server.sh \
 
 What it does:
 - installs baseline packages and developer tools
-- optionally applies SSH/UFW/fail2ban hardening
+- optionally applies unattended-upgrades/UFW/fail2ban hardening
 - installs the webhook receiver service
 - stores `DEFAULT_TLS_EMAIL` in `/etc/default/site-automation`
 - optionally installs the status webapp
+
+`prepare_server.py` leaves SSH untouched by default. If you explicitly want it to manage `sshd`, add `--with-ssh-hardening`.
 
 The Next.js status webapp is the supported dashboard for this repository.
 
@@ -41,14 +43,14 @@ If you want to use its admin controls:
 ## Deploy a repository
 
 ```bash
-sudo ./scripts/deploy-repo.sh \
+sudo python3 ./scripts/deploy_repo.py \
   --repo-url git@github.com:your-org/your-app.git
 ```
 
 Optional:
 
 ```bash
-sudo ./scripts/deploy-repo.sh \
+sudo python3 ./scripts/deploy_repo.py \
   --repo-url git@github.com:your-org/your-app.git \
   --dest /srv/apps/your-app \
   --branch main \
@@ -129,25 +131,25 @@ Legacy top-level shorthand like `build`, `command`, `port`, `www_redirect`, and 
 Show managed services:
 
 ```bash
-./scripts/manage-services.sh
+python3 ./scripts/manage_services.py
 ```
 
 Restart one app service:
 
 ```bash
-sudo ./scripts/manage-services.sh restart --app your-app
+sudo python3 ./scripts/manage_services.py restart --app your-app
 ```
 
 Stop managed services:
 
 ```bash
-sudo ./scripts/shutdown-server.sh
+sudo python3 ./scripts/shutdown_server.py
 ```
 
 Preview purge:
 
 ```bash
-sudo ./scripts/shutdown-server.sh --purge --dry-run
+sudo python3 ./scripts/shutdown_server.py --purge --dry-run
 ```
 
 ## Legacy Migration

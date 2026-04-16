@@ -8,13 +8,11 @@ source "$SCRIPT_DIR/lib/test-helpers.sh"
 # Initialized by test-helpers.sh; repeated here so ShellCheck sees it.
 declare -i pass_count="${pass_count:-0}"
 
-SEED_SCRIPT="$ROOT_DIR/scripts/seed-example-repositories.sh"
-
 test_seed_examples_creates_expected_git_repositories() {
   local tmp
   tmp="$(make_temp_dir)"
 
-  "$SEED_SCRIPT" --source-dir "$ROOT_DIR/examples/repositories" --target-dir "$tmp/apps" >"$tmp/seed.log"
+  python3 "$ROOT_DIR/scripts/seed_example_repositories.py" --source-dir "$ROOT_DIR/examples/repositories" --target-dir "$tmp/apps" >"$tmp/seed.log"
 
   assert_eq "3" "$(find "$tmp/apps" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
 
@@ -32,8 +30,8 @@ test_seed_examples_skips_existing_repositories_without_force() {
   local tmp
   tmp="$(make_temp_dir)"
 
-  "$SEED_SCRIPT" --source-dir "$ROOT_DIR/examples/repositories" --target-dir "$tmp/apps" >/dev/null
-  "$SEED_SCRIPT" --source-dir "$ROOT_DIR/examples/repositories" --target-dir "$tmp/apps" >"$tmp/seed.log"
+  python3 "$ROOT_DIR/scripts/seed_example_repositories.py" --source-dir "$ROOT_DIR/examples/repositories" --target-dir "$tmp/apps" >/dev/null
+  python3 "$ROOT_DIR/scripts/seed_example_repositories.py" --source-dir "$ROOT_DIR/examples/repositories" --target-dir "$tmp/apps" >"$tmp/seed.log"
 
   grep -q "Skipped existing example repository: simple-site" "$tmp/seed.log"
   grep -q "Skipped existing example repository: rest-api" "$tmp/seed.log"
@@ -46,7 +44,7 @@ test_seed_examples_include_server_conf_contract() {
   local tmp
   tmp="$(make_temp_dir)"
 
-  "$SEED_SCRIPT" --source-dir "$ROOT_DIR/examples/repositories" --target-dir "$tmp/apps" >/dev/null
+  python3 "$ROOT_DIR/scripts/seed_example_repositories.py" --source-dir "$ROOT_DIR/examples/repositories" --target-dir "$tmp/apps" >/dev/null
 
   jq -e '.runtime.mode == "service"' "$tmp/apps/complex-site/server.conf" >/dev/null
   jq -e '.runtime.mode == "service"' "$tmp/apps/rest-api/server.conf" >/dev/null

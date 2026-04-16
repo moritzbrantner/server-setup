@@ -90,8 +90,8 @@ test_docker_sandbox_deploys_tlm_deutschland() {
   docker exec "$CONTAINER_NAME" bash -lc 'systemctl start nginx'
   docker exec "$CONTAINER_NAME" bash -lc '
     cd /opt/server-setup
-    ./scripts/prepare-server.sh --email admin@example.com --skip-docker
-    ./scripts/deploy-repo.sh --repo-url https://github.com/moritzbrantner/tlm-deutschland.git --dest /root/apps/tlm-deutschland --email admin@example.com --skip-github-hook
+    python3 ./scripts/prepare_server.py --email admin@example.com --skip-docker
+    python3 ./scripts/deploy_repo.py --repo-url https://github.com/moritzbrantner/tlm-deutschland.git --dest /root/apps/tlm-deutschland --email admin@example.com --skip-github-hook
   '
 
   docker exec "$CONTAINER_NAME" bash -lc 'test -f /root/apps/tlm-deutschland/.next/BUILD_ID'
