@@ -346,3 +346,32 @@ class DeployEngineTests(unittest.TestCase):
                 self.module.maybe_install_node_dependencies(checkout, "bun install && bun run build", "bun run start")
 
         run_checked_mock.assert_not_called()
+
+    def test_build_registry_entry_normalizes_www_tls_hostnames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = pathlib.Path(tmp)
+            (checkout / "server.conf").write_text(
+                json.dumps(
+                    {
+                        "name": "marketing-site",
+                        "domain": "Example.com",
+                        "build_output": "dist",
+                        "nginx": {"www_redirect": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            registry_path = checkout / "registry.json"
+
+            entry = self.module.build_registry_entry(
+                registry_path,
+                "https://github.com/example/marketing-site.git",
+                "main",
+                checkout,
+            )
+
+        self.assertEqual(entry["domain"], "example.com")
+        self.assertEqual(
+            entry["deploy_config"]["nginx"]["tls_hostnames"],
+            ["example.com", "www.example.com"],
+        )

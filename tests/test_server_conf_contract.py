@@ -56,7 +56,7 @@ class ServerConfContractTests(unittest.TestCase):
                 json.dumps(
                     {
                         "name": "simple-site",
-                        "domain": "simple.localhost",
+                        "domain": "SIMPLE.localhost",
                         "build_output": "public",
                     }
                 ),
@@ -68,6 +68,7 @@ class ServerConfContractTests(unittest.TestCase):
         self.assertEqual(normalized["runtime"]["mode"], "static")
         self.assertEqual(normalized["service"]["name"], "simple-site.service")
         self.assertEqual(normalized["nginx"]["tls_hostnames"], ["simple.localhost"])
+        self.assertEqual(normalized["domain"], "simple.localhost")
 
     def test_normalize_accepts_nested_service_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,6 +132,70 @@ class ServerConfContractTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(self.module.ValidationError, "unsupported key 'repo'"):
+                self.module.normalize_server_conf(tmp)
+
+    def test_normalize_www_redirect_adds_www_tls_hostname(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conf_path = pathlib.Path(tmp) / "server.conf"
+            conf_path.write_text(
+                json.dumps(
+                    {
+                        "name": "site",
+                        "domain": "Example.COM",
+                        "build_output": "public",
+                        "nginx": {
+                            "www_redirect": True,
+                            "tls_hostnames": ["example.com"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            normalized = self.module.normalize_server_conf(tmp)
+
+        self.assertEqual(normalized["domain"], "example.com")
+        self.assertEqual(normalized["nginx"]["tls_hostnames"], ["example.com", "www.example.com"])
+
+    def test_normalize_deduplicates_lowercased_tls_hostnames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conf_path = pathlib.Path(tmp) / "server.conf"
+            conf_path.write_text(
+                json.dumps(
+                    {
+                        "name": "site",
+                        "domain": "Example.COM",
+                        "build_output": "public",
+                        "nginx": {
+                            "tls_hostnames": ["WWW.EXAMPLE.COM", "example.com", "www.example.com"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            normalized = self.module.normalize_server_conf(tmp)
+
+        self.assertEqual(normalized["nginx"]["tls_hostnames"], ["example.com", "www.example.com"])
+
+    def test_normalize_rejects_non_www_tls_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conf_path = pathlib.Path(tmp) / "server.conf"
+            conf_path.write_text(
+                json.dumps(
+                    {
+                        "name": "site",
+                        "domain": "example.com",
+                        "build_output": "public",
+                        "nginx": {
+                            "tls_hostnames": ["example.com", "blog.example.com"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(self.module.ValidationError, "only supports the primary domain"):
                 self.module.normalize_server_conf(tmp)
 
     def test_create_server_conf_interactively_generates_static_config(self) -> None:

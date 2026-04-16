@@ -16,6 +16,58 @@ class RegistryError(ValueError):
     """Raised when registry data is invalid."""
 
 
+def _is_same_site(existing: dict, incoming: dict) -> bool:
+    return (
+        str(existing.get("name") or "") == str(incoming.get("name") or "")
+        or str(existing.get("checkout_path") or "") == str(incoming.get("checkout_path") or "")
+    )
+
+
+def _normalized_domain(entry: dict) -> str:
+    return str(entry.get("domain") or "").strip().lower()
+
+
+def _service_runtime(entry: dict) -> tuple[str, int | None] | None:
+    deploy_config = entry.get("deploy_config") or {}
+    runtime = deploy_config.get("runtime") or {}
+    service = deploy_config.get("service") or {}
+    if runtime.get("mode") != "service":
+        return None
+    service_name = str(entry.get("service_name") or service.get("name") or "").strip()
+    port = runtime.get("port")
+    return service_name, port if isinstance(port, int) else None
+
+
+def validate_registry_entry_conflicts(entries: list[dict], incoming: dict) -> None:
+    incoming_domain = _normalized_domain(incoming)
+    incoming_service_runtime = _service_runtime(incoming)
+
+    for existing in entries:
+        if _is_same_site(existing, incoming):
+            continue
+
+        existing_name = str(existing.get("name") or "").strip() or "<unknown>"
+        if incoming_domain and _normalized_domain(existing) == incoming_domain:
+            raise RegistryError(
+                f"Registry conflict on domain '{incoming['domain']}': existing site '{existing_name}' already uses it."
+            )
+
+        existing_service_runtime = _service_runtime(existing)
+        if not incoming_service_runtime or not existing_service_runtime:
+            continue
+
+        incoming_service_name, incoming_port = incoming_service_runtime
+        existing_service_name, existing_port = existing_service_runtime
+        if incoming_service_name and existing_service_name == incoming_service_name:
+            raise RegistryError(
+                f"Registry conflict on service_name '{incoming_service_name}': existing site '{existing_name}' already uses it."
+            )
+        if incoming_port is not None and existing_port == incoming_port:
+            raise RegistryError(
+                f"Registry conflict on runtime.port '{incoming_port}': existing site '{existing_name}' already uses it."
+            )
+
+
 def _write_json(path: Path, payload: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8")
@@ -64,6 +116,8 @@ def upsert_registry_entry(
         "managed_by": "deploy-repo",
         "deploy_config": normalized_conf,
     }
+
+    validate_registry_entry_conflicts(entries, entry)
 
     filtered = [
         existing

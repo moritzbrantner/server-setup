@@ -122,6 +122,54 @@ def _clean_optional(value: str | None) -> str | None:
     return cleaned or None
 
 
+def _normalize_hostname(value: str, conf_path: Path, key: str) -> str:
+    hostname = value.strip().lower()
+    if not hostname:
+        raise ValidationError(f"Validation error in {conf_path}: {key} must be a non-empty string")
+    return hostname
+
+
+def _normalize_tls_hostnames(
+    domain: str,
+    tls_hostnames: object,
+    *,
+    www_redirect: bool,
+    conf_path: Path,
+) -> list[str]:
+    if tls_hostnames is None:
+        candidates: list[object] = [domain]
+    else:
+        if not isinstance(tls_hostnames, list):
+            raise ValidationError(
+                f"Validation error in {conf_path}: nginx.tls_hostnames must be a list of non-empty strings"
+            )
+        candidates = list(tls_hostnames)
+
+    allowed = {domain, f"www.{domain}"}
+    seen: set[str] = set()
+    includes_www = www_redirect
+    for item in candidates:
+        if not isinstance(item, str) or not item.strip():
+            raise ValidationError(
+                f"Validation error in {conf_path}: nginx.tls_hostnames must be a list of non-empty strings"
+            )
+        hostname = _normalize_hostname(item, conf_path, "nginx.tls_hostnames")
+        if hostname not in allowed:
+            raise ValidationError(
+                "Validation error in "
+                f"{conf_path}: nginx.tls_hostnames only supports the primary domain '{domain}' "
+                f"and optional 'www.{domain}', got '{hostname}'"
+            )
+        seen.add(hostname)
+        if hostname == f"www.{domain}":
+            includes_www = True
+
+    normalized = [domain]
+    if includes_www:
+        normalized.append(f"www.{domain}")
+    return normalized
+
+
 def _default_build_command(checkout: Path) -> str:
     if (checkout / "package.json").is_file():
         if (checkout / "bun.lock").exists() or (checkout / "bun.lockb").exists():
@@ -151,7 +199,7 @@ def create_server_conf_interactively(
     print_fn("Enter the deployment settings to create it.")
 
     name = prompt_text_fn("Site name", default=checkout.name, required=True).strip()
-    domain = prompt_text_fn("Primary domain", required=True).strip()
+    domain = prompt_text_fn("Primary domain", required=True).strip().lower()
     mode = _prompt_choice(
         prompt_text_fn,
         print_fn,
@@ -307,7 +355,7 @@ def normalize_server_conf(checkout_path: str | Path) -> dict:
     _validate_allowed_keys(conf_path, "nginx", nginx, SUPPORTED_NGINX_KEYS)
 
     name = _require_string(conf.get("name"), "name", conf_path)
-    domain = _require_string(conf.get("domain"), "domain", conf_path)
+    domain = _normalize_hostname(_require_string(conf.get("domain"), "domain", conf_path), conf_path, "domain")
     build_output = conf.get("build_output")
     web_root = conf.get("web_root")
     if build_output is None and web_root is None:
@@ -324,13 +372,12 @@ def normalize_server_conf(checkout_path: str | Path) -> dict:
     www_redirect = nginx.get("www_redirect", False)
     if not isinstance(www_redirect, bool):
         raise ValidationError(f"Validation error in {conf_path}: nginx.www_redirect must be a boolean")
-    tls_hostnames = nginx.get("tls_hostnames", [domain])
-    if tls_hostnames is None:
-        tls_hostnames = [domain]
-    if not isinstance(tls_hostnames, list) or any(not isinstance(item, str) or not item.strip() for item in tls_hostnames):
-        raise ValidationError(
-            f"Validation error in {conf_path}: nginx.tls_hostnames must be a list of non-empty strings"
-        )
+    tls_hostnames = _normalize_tls_hostnames(
+        domain,
+        nginx.get("tls_hostnames", [domain]),
+        www_redirect=www_redirect,
+        conf_path=conf_path,
+    )
 
     normalized = {
         "name": name,
@@ -346,7 +393,7 @@ def normalize_server_conf(checkout_path: str | Path) -> dict:
         "service": {"name": service_name.strip()},
         "nginx": {
             "www_redirect": www_redirect,
-            "tls_hostnames": [item.strip() for item in tls_hostnames],
+            "tls_hostnames": tls_hostnames,
         },
         "source_server_conf": str(conf_path.resolve()),
     }

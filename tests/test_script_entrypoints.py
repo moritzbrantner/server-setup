@@ -130,7 +130,7 @@ class EnsureServerToolsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module("ensure_server_tools.py")
 
-    def test_main_installs_nginx_in_baseline_package_set(self) -> None:
+    def test_main_installs_nginx_and_python_packaging_tools_in_baseline_package_set(self) -> None:
         args = argparse.Namespace(skip_docker=True)
 
         with patch.object(self.module, "parse_args", return_value=args):
@@ -142,13 +142,51 @@ class EnsureServerToolsTests(unittest.TestCase):
                 ):
                     with patch.object(self.module, "run_checked"):
                         with patch.object(self.module, "install_pkgs") as install_pkgs:
-                            with patch.object(self.module, "install_or_update_bun"):
-                                with patch.object(self.module, "install_or_update_gh"):
-                                    with patch.object(self.module, "ensure_postgres_enabled"):
-                                        self.module.main()
+                            with patch.object(self.module, "install_or_update_nodejs"):
+                                with patch.object(self.module, "install_or_update_bun"):
+                                    with patch.object(self.module, "install_or_update_gh"):
+                                        with patch.object(self.module, "ensure_postgres_enabled"):
+                                            self.module.main()
 
         baseline_packages = install_pkgs.call_args_list[0].args[0]
+        self.assertIn("certbot", baseline_packages)
         self.assertIn("nginx", baseline_packages)
+        self.assertIn("python3-certbot-nginx", baseline_packages)
+        self.assertIn("python3-pip", baseline_packages)
+        self.assertIn("python3-venv", baseline_packages)
+
+    def test_main_bootstraps_nodejs_before_bun(self) -> None:
+        args = argparse.Namespace(skip_docker=True)
+
+        with patch.object(self.module, "parse_args", return_value=args):
+            with patch.object(self.module, "require_root"):
+                with patch.object(
+                    self.module.shutil,
+                    "which",
+                    side_effect=lambda name: "/usr/bin/apt-get" if name == "apt-get" else None,
+                ):
+                    with patch.object(self.module, "run_checked"):
+                        with patch.object(self.module, "install_pkgs"):
+                            with patch.object(self.module, "install_or_update_nodejs") as install_nodejs:
+                                with patch.object(self.module, "install_or_update_bun"):
+                                    with patch.object(self.module, "install_or_update_gh"):
+                                        with patch.object(self.module, "ensure_postgres_enabled"):
+                                            self.module.main()
+
+        install_nodejs.assert_called_once_with()
+
+    def test_install_or_update_nodejs_enables_corepack(self) -> None:
+        with patch.object(self.module, "configure_nodesource_repo_for_apt") as configure_repo:
+            with patch.object(self.module, "install_pkgs") as install_pkgs:
+                with patch.object(self.module, "validate_node_install") as validate_node_install:
+                    with patch.object(self.module.shutil, "which", return_value="/usr/bin/corepack"):
+                        with patch.object(self.module, "run_checked") as run_checked:
+                            self.module.install_or_update_nodejs()
+
+        configure_repo.assert_called_once_with()
+        install_pkgs.assert_called_once_with(["nodejs"])
+        run_checked.assert_called_once_with(["corepack", "enable"])
+        validate_node_install.assert_called_once_with()
 
 
 class SandboxEntrypointTests(unittest.TestCase):

@@ -13,6 +13,23 @@ Generated state lives on the target host:
 
 The committed [`deploy/registry.example.json`](deploy/registry.example.json) file is only a shape example.
 
+## Supported deployment model
+
+`server-setup` is first-class for Ubuntu/Debian single-server hosting with:
+- static sites
+- SPAs served by `nginx`
+- single-process Node.js or Bun services behind `nginx` and `systemd`
+- single-process Python services behind `nginx` and `systemd`
+
+This repository assumes one server running `nginx`, optional per-app `systemd` services, Let’s Encrypt, and optional GitHub push redeploys.
+
+## Out of scope
+
+`server-setup` does not natively manage:
+- PHP-FPM, WordPress, or Laravel stacks
+- multi-container app stacks as the main deploy model
+- wildcard certificates or DNS-provider integrations for certificate issuance
+
 ## Prepare the server
 
 ```bash
@@ -24,11 +41,24 @@ sudo python3 ./scripts/prepare_server.py \
 
 What it does:
 - installs baseline packages and developer tools
+- installs Node.js 22.x LTS, `npm`, `npx`, and enables `corepack` for `pnpm`/`yarn`
+- installs Python packaging tools (`python3-pip`, `python3-venv`)
 - installs, enables, and starts `nginx`
 - optionally applies unattended-upgrades/UFW/fail2ban hardening
 - installs the webhook receiver service
 - stores `DEFAULT_TLS_EMAIL` in `/etc/default/site-automation`
 - optionally installs the status webapp
+
+Fresh host capabilities after `prepare_server.py`:
+- `nginx`
+- `certbot`
+- `git`
+- `gh`
+- Bun
+- Node.js + `npm` + `corepack` (`pnpm`/`yarn`)
+- Python venv and pip tooling
+- PostgreSQL
+- Docker, unless `--skip-docker` is supplied
 
 `prepare_server.py` leaves SSH untouched by default. If you explicitly want it to manage `sshd`, add `--with-ssh-hardening`.
 
@@ -62,6 +92,7 @@ sudo python3 ./scripts/deploy_repo.py \
 What it does:
 - clones or updates the checkout under `/srv/apps/<repo-name>` by default
 - validates `server.conf`
+- rejects registry conflicts before deploy when another site already uses the same domain, service name, or runtime port
 - upserts `deploy/registry.json`
 - runs the repo deploy hooks
 - creates or updates the app systemd service
@@ -115,6 +146,24 @@ Minimal long-running service:
 }
 ```
 
+Canonical Python service:
+
+```json
+{
+  "name": "python-api",
+  "domain": "api.example.com",
+  "build_output": ".",
+  "deploy_hooks": {
+    "build": "python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt"
+  },
+  "runtime": {
+    "mode": "service",
+    "command": "PORT=4001 ./.venv/bin/python app.py",
+    "port": 4001
+  }
+}
+```
+
 Supported top-level keys:
 - `name`
 - `domain`
@@ -126,6 +175,12 @@ Supported top-level keys:
 - `nginx`
 
 Legacy top-level shorthand like `build`, `command`, `port`, `www_redirect`, and infrastructure keys like `repo`, `branch`, or `workdir` are rejected.
+
+`nginx.tls_hostnames` is intentionally narrow for this project scope:
+- the primary domain is always included
+- the only optional extra hostname is `www.<domain>`
+- any other alias hostname is rejected during validation
+- if `nginx.www_redirect` is `true`, `www.<domain>` is automatically added for TLS
 
 ## Operate the stack
 

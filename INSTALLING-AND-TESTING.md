@@ -82,6 +82,12 @@ The example repositories under `examples/repositories/` use the current nested `
 - `complex-site`
 - `marketing-site`
 
+Those examples stay within the supported hosting scope for this repository:
+- static sites
+- single-process Node/Bun services
+- single-process Python services
+- one primary domain plus optional `www`
+
 ## Canonical Development Notes
 
 - The supported dashboard is `monitor/webapp`; the legacy Python dashboard has been retired.

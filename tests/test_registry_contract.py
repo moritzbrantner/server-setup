@@ -25,6 +25,22 @@ class RegistryContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
 
+    def _service_conf(
+        self,
+        *,
+        name: str,
+        domain: str,
+        service_name: str,
+        port: int,
+    ) -> dict:
+        return {
+            "name": name,
+            "domain": domain,
+            "service": {"name": service_name},
+            "runtime": {"mode": "service", "port": port},
+            "source_server_conf": f"/srv/apps/{name}/server.conf",
+        }
+
     def test_upsert_registry_entry_writes_expected_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "registry.json"
@@ -73,3 +89,127 @@ class RegistryContractTests(unittest.TestCase):
 
         self.assertIsNotNone(entry)
         self.assertEqual(entry["name"], "app")
+
+    def test_upsert_registry_entry_rejects_duplicate_domain_case_insensitively(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "registry.json"
+            self.module.upsert_registry_entry(
+                path,
+                "https://github.com/example/alpha.git",
+                "main",
+                "/srv/apps/alpha",
+                self._service_conf(
+                    name="alpha",
+                    domain="alpha.example.com",
+                    service_name="alpha.service",
+                    port=3000,
+                ),
+            )
+
+            with self.assertRaisesRegex(self.module.RegistryError, "existing site 'alpha'"):
+                self.module.upsert_registry_entry(
+                    path,
+                    "https://github.com/example/beta.git",
+                    "main",
+                    "/srv/apps/beta",
+                    self._service_conf(
+                        name="beta",
+                        domain="ALPHA.EXAMPLE.COM",
+                        service_name="beta.service",
+                        port=3001,
+                    ),
+                )
+
+    def test_upsert_registry_entry_rejects_duplicate_service_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "registry.json"
+            self.module.upsert_registry_entry(
+                path,
+                "https://github.com/example/alpha.git",
+                "main",
+                "/srv/apps/alpha",
+                self._service_conf(
+                    name="alpha",
+                    domain="alpha.example.com",
+                    service_name="shared.service",
+                    port=3000,
+                ),
+            )
+
+            with self.assertRaisesRegex(self.module.RegistryError, "service_name 'shared.service'"):
+                self.module.upsert_registry_entry(
+                    path,
+                    "https://github.com/example/beta.git",
+                    "main",
+                    "/srv/apps/beta",
+                    self._service_conf(
+                        name="beta",
+                        domain="beta.example.com",
+                        service_name="shared.service",
+                        port=3001,
+                    ),
+                )
+
+    def test_upsert_registry_entry_rejects_duplicate_runtime_port(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "registry.json"
+            self.module.upsert_registry_entry(
+                path,
+                "https://github.com/example/alpha.git",
+                "main",
+                "/srv/apps/alpha",
+                self._service_conf(
+                    name="alpha",
+                    domain="alpha.example.com",
+                    service_name="alpha.service",
+                    port=3000,
+                ),
+            )
+
+            with self.assertRaisesRegex(self.module.RegistryError, "runtime.port '3000'"):
+                self.module.upsert_registry_entry(
+                    path,
+                    "https://github.com/example/beta.git",
+                    "main",
+                    "/srv/apps/beta",
+                    self._service_conf(
+                        name="beta",
+                        domain="beta.example.com",
+                        service_name="beta.service",
+                        port=3000,
+                    ),
+                )
+
+    def test_upsert_registry_entry_allows_replacing_same_named_site(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "registry.json"
+            self.module.upsert_registry_entry(
+                path,
+                "https://github.com/example/alpha.git",
+                "main",
+                "/srv/apps/alpha-old",
+                self._service_conf(
+                    name="alpha",
+                    domain="alpha.example.com",
+                    service_name="alpha.service",
+                    port=3000,
+                ),
+            )
+
+            entry = self.module.upsert_registry_entry(
+                path,
+                "https://github.com/example/alpha.git",
+                "main",
+                "/srv/apps/alpha",
+                self._service_conf(
+                    name="alpha",
+                    domain="alpha.example.com",
+                    service_name="alpha.service",
+                    port=3000,
+                ),
+            )
+            payload = self.module.load_registry(path)
+
+        self.assertEqual(entry["checkout_path"], "/srv/apps/alpha")
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["checkout_path"], "/srv/apps/alpha")

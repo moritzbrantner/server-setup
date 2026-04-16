@@ -7,6 +7,7 @@ What it demonstrates:
 - service-mode deployment
 - health checks
 - Postgres-backed persistence using the attached compose database
+- single-process Python service deployment behind `nginx` and `systemd`
 - CORS access from `http://app.localhost`
 - direct passthrough access from `http://127.0.0.1:4002`
 

@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_BUN_INSTALL = "/root/.bun"
+DEFAULT_NODE_MAJOR = "22"
 
 
 def log(message: str) -> None:
@@ -106,11 +107,60 @@ def configure_docker_repo_for_apt() -> None:
     run_checked(["apt-get", "update", "-y"])
 
 
+def configure_nodesource_repo_for_apt(node_major: str = DEFAULT_NODE_MAJOR) -> None:
+    if not node_major.isdigit():
+        raise SystemExit(f"Invalid Node.js major version: {node_major!r}")
+
+    install_pkgs(["ca-certificates", "curl", "gnupg"])
+    keyring_dir = Path("/etc/apt/keyrings")
+    keyring_dir.mkdir(parents=True, exist_ok=True)
+    keyring_path = keyring_dir / "nodesource.gpg"
+    if not keyring_path.exists() or keyring_path.stat().st_size == 0:
+        key_result = subprocess.run(
+            ["curl", "-fsSL", "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"],
+            check=True,
+            capture_output=True,
+        )
+        dearmored = subprocess.run(
+            ["gpg", "--dearmor"],
+            check=True,
+            capture_output=True,
+            input=key_result.stdout,
+        )
+        keyring_path.write_bytes(dearmored.stdout)
+        keyring_path.chmod(0o644)
+    repo_file = Path("/etc/apt/sources.list.d/nodesource.list")
+    repo_file.write_text(
+        (
+            f"deb [signed-by={keyring_path}] https://deb.nodesource.com/node_{node_major}.x nodistro main\n"
+            f"deb-src [signed-by={keyring_path}] https://deb.nodesource.com/node_{node_major}.x nodistro main\n"
+        ),
+        encoding="utf-8",
+    )
+    run_checked(["apt-get", "update", "-y"])
+
+
 def validate_docker_install() -> None:
     if shutil.which("docker") is None:
         raise SystemExit("Docker validation failed: docker binary not found in PATH.")
     if shutil.which("systemctl") and run_checked(["systemctl", "is-active", "--quiet", "docker"], allow_fail=True).returncode != 0:
         raise SystemExit("Docker validation failed: docker service is not active.")
+
+
+def validate_node_install() -> None:
+    for binary in ("node", "npm", "npx"):
+        if shutil.which(binary) is None:
+            raise SystemExit(f"Node.js validation failed: {binary} binary not found in PATH.")
+
+
+def install_or_update_nodejs() -> None:
+    log(f"Ensuring Node.js {DEFAULT_NODE_MAJOR}.x LTS is installed")
+    configure_nodesource_repo_for_apt()
+    install_pkgs(["nodejs"])
+    validate_node_install()
+    if shutil.which("corepack") is None:
+        raise SystemExit("Node.js validation failed: corepack binary not found in PATH.")
+    run_checked(["corepack", "enable"])
 
 
 def install_and_enable_docker() -> None:
@@ -179,16 +229,21 @@ def main() -> None:
         [
             "ca-certificates",
             "curl",
+            "certbot",
             "git",
             "jq",
             "unzip",
             "build-essential",
             "nginx",
+            "python3-certbot-nginx",
             "postgresql",
             "postgresql-client",
+            "python3-pip",
+            "python3-venv",
             "inotify-tools",
         ]
     )
+    install_or_update_nodejs()
     install_or_update_bun()
     install_or_update_gh()
     ensure_postgres_enabled()
@@ -198,7 +253,7 @@ def main() -> None:
     else:
         install_and_enable_docker()
 
-    log("Finished: tools, nginx, postgres, and docker bootstrap steps are complete.")
+    log("Finished: tools, Node.js, bun, nginx, postgres, and docker bootstrap steps are complete.")
 
 
 if __name__ == "__main__":
