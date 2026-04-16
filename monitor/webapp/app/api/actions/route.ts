@@ -32,6 +32,8 @@ function parseActionRequest(body: unknown): DashboardActionRequest {
 
   const record = body as Record<string, unknown>;
   switch (record.action) {
+    case "start-nginx":
+    case "restart-nginx":
     case "reload-nginx":
     case "restart-webhook":
     case "restart-status-webapp":

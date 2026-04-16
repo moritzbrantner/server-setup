@@ -149,6 +149,9 @@ test("dashboard renders important issues and setup details", () => {
 
   assert.match(markup, /What needs attention/);
   assert.match(markup, /Config and recovery controls/);
+  assert.match(markup, /Start Nginx/);
+  assert.match(markup, /Restart Nginx/);
+  assert.match(markup, /Reload Nginx/);
   assert.match(markup, /Add website/);
   assert.match(markup, /Push to Main/);
   assert.match(markup, /Retry deploy/);

@@ -125,6 +125,10 @@ async function readError(response: Response): Promise<string> {
 
 function actionLabel(action: DashboardActionRequest["action"]): string {
   switch (action) {
+    case "start-nginx":
+      return "Start Nginx";
+    case "restart-nginx":
+      return "Restart Nginx";
     case "reload-nginx":
       return "Reload Nginx";
     case "restart-webhook":
@@ -632,6 +636,22 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
               </div>
             </div>
             <div className="button-grid">
+              <button
+                className="secondary-button"
+                disabled={!adminUnlocked || busyActionKey !== null}
+                onClick={() => void runAction({ action: "start-nginx" })}
+                type="button"
+              >
+                {busyActionKey === "start-nginx" ? "Starting..." : "Start Nginx"}
+              </button>
+              <button
+                className="secondary-button"
+                disabled={!adminUnlocked || busyActionKey !== null}
+                onClick={() => void runAction({ action: "restart-nginx" })}
+                type="button"
+              >
+                {busyActionKey === "restart-nginx" ? "Restarting..." : "Restart Nginx"}
+              </button>
               <button
                 className="secondary-button"
                 disabled={!adminUnlocked || busyActionKey !== null}
