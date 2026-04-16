@@ -220,6 +220,109 @@ exit 0
   assert.match(loggedCommand, /scripts\/deploy_repo\.py --repo-url https:\/\/github\.com\/example\/app\.git --dest \/srv\/apps\/app --branch main --skip-github-hook/);
 });
 
+test("runDashboardAction can add a new site through deploy_repo", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const rootDir = path.join(tmpDir, "root");
+  const scriptsDir = path.join(rootDir, "scripts");
+  const binDir = path.join(tmpDir, "bin");
+  const logsDir = path.join(tmpDir, "logs");
+  const registryPath = path.join(rootDir, "deploy", "registry.json");
+  const automationEnvPath = path.join(tmpDir, "site-automation");
+  const sshConfigPath = path.join(tmpDir, "sshd.conf");
+
+  await mkdir(scriptsDir, { recursive: true });
+  await mkdir(binDir);
+  await mkdir(logsDir);
+  await writeFile(path.join(scriptsDir, "deploy_repo.py"), "print('stub deploy')\n", "utf-8");
+  await writeFile(automationEnvPath, "WEBHOOK_SECRET=test\nDEFAULT_TLS_EMAIL=ops@example.com\n", "utf-8");
+  await writeFile(sshConfigPath, "PasswordAuthentication no\nPermitRootLogin no\n", "utf-8");
+
+  await writeExecutable(
+    path.join(binDir, "systemctl"),
+    `#!/usr/bin/env bash
+command="$1"
+case "$command" in
+  is-active)
+    printf 'active\\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+  );
+  await writeExecutable(
+    path.join(binDir, "python3"),
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${logsDir}/python3.log"
+mkdir -p "$(dirname "$REGISTRY_PATH")"
+cat >"$REGISTRY_PATH" <<'JSON'
+[
+  {
+    "name": "new-app",
+    "repo_url": "https://github.com/example/new-app.git",
+    "branch": "main",
+    "checkout_path": "/srv/apps/new-app",
+    "domain": "new-app.example.com",
+    "webhook_repo": "example/new-app",
+    "deploy_config": {
+      "name": "new-app",
+      "domain": "new-app.example.com",
+      "runtime": {
+        "mode": "static"
+      }
+    }
+  }
+]
+JSON
+`
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response("ok", {
+      status: 200,
+      headers: {
+        "content-type": "text/plain",
+      },
+    });
+
+  try {
+    await withEnv(
+      {
+        SERVER_SETUP_ROOT: rootDir,
+        PATH: `${binDir}:${process.env.PATH || ""}`,
+        STATUS_AUTOMATION_ENV_FILE: automationEnvPath,
+        STATUS_SSH_HARDENING_CONFIG: sshConfigPath,
+        STATUS_LETSENCRYPT_LIVE_DIR: path.join(tmpDir, "letsencrypt"),
+      },
+      async () => {
+        const response = await runDashboardAction({
+          action: "add-site",
+          repoUrl: "https://github.com/example/new-app.git",
+          branch: "main",
+          checkoutPath: "/srv/apps/new-app",
+          email: "ops@example.com",
+          skipGithubHook: true,
+        });
+
+        assert.equal(response.result.action, "add-site");
+        assert.equal(response.snapshot.applications[0]?.name, "new-app");
+
+        const config = await readEditableConfig();
+        assert.equal(config.path, registryPath);
+        assert.equal(config.kind, "registry");
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
+  assert.match(loggedCommand, /scripts\/deploy_repo\.py --repo-url https:\/\/github\.com\/example\/new-app\.git --dest \/srv\/apps\/new-app --branch main --email ops@example\.com --skip-github-hook/);
+});
+
 test("updateSiteDeploymentSettings patches registry metadata", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
   const configPath = path.join(tmpDir, "registry.json");

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { requestHasAdminAccess } from "@/lib/auth";
-import { runDashboardAction, type DashboardActionRequest } from "@/lib/control";
+import {
+  readEditableConfig,
+  runDashboardAction,
+  type DashboardActionRequest,
+} from "@/lib/control";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -38,6 +42,15 @@ function parseActionRequest(body: unknown): DashboardActionRequest {
         throw new Error("This action requires a non-empty siteName.");
       }
       return { action: record.action, siteName: record.siteName.trim() };
+    case "add-site":
+      return {
+        action: "add-site",
+        repoUrl: typeof record.repoUrl === "string" ? record.repoUrl : "",
+        branch: typeof record.branch === "string" ? record.branch : "",
+        checkoutPath: typeof record.checkoutPath === "string" ? record.checkoutPath : "",
+        email: typeof record.email === "string" ? record.email : "",
+        skipGithubHook: record.skipGithubHook === true,
+      };
     default:
       throw new Error("Unsupported action.");
   }
@@ -52,7 +65,8 @@ export async function POST(request: Request) {
     const body = parseActionRequest(await request.json());
 
     const response = await runDashboardAction(body);
-    return NextResponse.json(response, {
+    const config = await readEditableConfig();
+    return NextResponse.json({ ...response, config }, {
       headers: {
         "cache-control": "no-store",
       },

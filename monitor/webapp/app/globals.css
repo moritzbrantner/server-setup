@@ -311,6 +311,7 @@ main {
 .button-grid,
 .token-form,
 .token-field,
+.toggle-field,
 .action-result,
 .site-actions,
 .deploy-panel,
@@ -358,6 +359,22 @@ main {
 .secondary-button,
 .ghost-button {
   font: inherit;
+}
+
+.toggle-field {
+  grid-auto-flow: column;
+  grid-auto-columns: max-content 1fr;
+  align-items: center;
+}
+
+.toggle-field input {
+  width: 18px;
+  height: 18px;
+  accent-color: #78e08f;
+}
+
+.toggle-field span {
+  color: var(--text);
 }
 
 .token-field input,
