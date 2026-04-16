@@ -15,6 +15,8 @@ export type EditableConfigDocument = {
 };
 
 export type DashboardActionRequest =
+  | { action: "start-nginx" }
+  | { action: "restart-nginx" }
   | { action: "reload-nginx" }
   | { action: "restart-webhook" }
   | { action: "restart-status-webapp" }
@@ -349,6 +351,24 @@ export async function runDashboardAction(
   let result: DashboardActionResult;
 
   switch (request.action) {
+    case "start-nginx":
+      result = await runTypedCommand(
+        "start-nginx",
+        "systemctl",
+        ["start", "nginx"],
+        "Nginx start requested.",
+        "nginx"
+      );
+      break;
+    case "restart-nginx":
+      result = await runTypedCommand(
+        "restart-nginx",
+        "systemctl",
+        ["restart", "nginx"],
+        "Nginx restart requested.",
+        "nginx"
+      );
+      break;
     case "reload-nginx":
       result = await runTypedCommand(
         "reload-nginx",

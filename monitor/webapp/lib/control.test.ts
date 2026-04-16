@@ -220,6 +220,81 @@ exit 0
   assert.match(loggedCommand, /scripts\/deploy_repo\.py --repo-url https:\/\/github\.com\/example\/app\.git --dest \/srv\/apps\/app --branch main --skip-github-hook/);
 });
 
+test("runDashboardAction can start and restart nginx", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const rootDir = path.join(tmpDir, "root");
+  const binDir = path.join(tmpDir, "bin");
+  const logsDir = path.join(tmpDir, "logs");
+  const configPath = path.join(rootDir, "deploy", "registry.json");
+  const automationEnvPath = path.join(tmpDir, "site-automation");
+  const sshConfigPath = path.join(tmpDir, "sshd.conf");
+
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await mkdir(binDir);
+  await mkdir(logsDir);
+  await writeFile(configPath, "[]\n", "utf-8");
+  await writeFile(automationEnvPath, "WEBHOOK_SECRET=test\n", "utf-8");
+  await writeFile(sshConfigPath, "PasswordAuthentication no\nPermitRootLogin no\n", "utf-8");
+
+  await writeExecutable(
+    path.join(binDir, "systemctl"),
+    `#!/usr/bin/env bash
+command="$1"
+unit="$2"
+case "$command" in
+  is-active)
+    printf 'active\\n'
+    exit 0
+    ;;
+  start|restart|reload)
+    printf '%s %s\\n' "$command" "$unit" >>"${logsDir}/systemctl.log"
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response("ok", {
+      status: 200,
+      headers: {
+        "content-type": "text/plain",
+      },
+    });
+
+  try {
+    await withEnv(
+      {
+        SERVER_SETUP_ROOT: rootDir,
+        STATUS_CONFIG_PATH: configPath,
+        PATH: `${binDir}:${process.env.PATH || ""}`,
+        STATUS_AUTOMATION_ENV_FILE: automationEnvPath,
+        STATUS_SSH_HARDENING_CONFIG: sshConfigPath,
+        STATUS_LETSENCRYPT_LIVE_DIR: path.join(tmpDir, "letsencrypt"),
+      },
+      async () => {
+        const startResponse = await runDashboardAction({ action: "start-nginx" });
+        assert.equal(startResponse.result.action, "start-nginx");
+        assert.equal(startResponse.result.target, "nginx");
+
+        const restartResponse = await runDashboardAction({ action: "restart-nginx" });
+        assert.equal(restartResponse.result.action, "restart-nginx");
+        assert.equal(restartResponse.result.target, "nginx");
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const systemctlLog = await readFile(path.join(logsDir, "systemctl.log"), "utf-8");
+  assert.match(systemctlLog, /^start nginx$/m);
+  assert.match(systemctlLog, /^restart nginx$/m);
+});
+
 test("runDashboardAction can add a new site through deploy_repo", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
   const rootDir = path.join(tmpDir, "root");
