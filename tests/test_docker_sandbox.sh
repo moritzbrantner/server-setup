@@ -87,7 +87,6 @@ test_docker_sandbox_deploys_tlm_deutschland() {
   docker exec "$CONTAINER_NAME" bash -lc 'shellcheck --version >/dev/null'
   docker exec "$CONTAINER_NAME" bash -lc 'bun --version >/dev/null'
   verify_tlm_repo_access
-  docker exec "$CONTAINER_NAME" bash -lc 'systemctl start nginx'
   docker exec "$CONTAINER_NAME" bash -lc '
     cd /opt/server-setup
     python3 ./scripts/prepare_server.py --email admin@example.com --skip-docker

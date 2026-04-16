@@ -25,22 +25,25 @@ def main() -> None:
     if not tls_email:
         raise SystemExit("--email is required unless DEFAULT_TLS_EMAIL already exists in /etc/default/site-automation")
 
-    print("[1/4] Installing baseline tools")
+    print("[1/5] Installing baseline tools")
     cmd = ["python3", str(root / "scripts/ensure_server_tools.py")]
     if args.skip_docker:
         cmd.append("--skip-docker")
     run_checked(cmd, cwd=root)
 
+    print("[2/5] Enabling and starting nginx")
+    run_checked(["systemctl", "enable", "--now", "nginx"], cwd=root)
+
     if args.skip_hardening:
-        print("[2/4] Skipping host hardening")
+        print("[3/5] Skipping host hardening")
     else:
-        print("[2/4] Applying unattended-upgrades/UFW/fail2ban hardening")
+        print("[3/5] Applying unattended-upgrades/UFW/fail2ban hardening")
         hardening_cmd = ["python3", str(root / "scripts/harden_server.py")]
         if args.with_ssh_hardening:
             hardening_cmd.append("--configure-ssh")
         run_checked(hardening_cmd, cwd=root)
 
-    print("[3/4] Installing deploy automation services")
+    print("[4/5] Installing deploy automation services")
     setup_automation_units(root, start_webhook=False)
     update_env_file(
         AUTOMATION_ENV_FILE,
@@ -52,14 +55,15 @@ def main() -> None:
     )
 
     if args.with_status_webapp:
-        print("[4/4] Installing status webapp")
+        print("[5/5] Installing status webapp")
         run_checked(["python3", str(root / "scripts/setup_status_webapp.py"), "--root", str(root)], cwd=root)
     else:
-        print("[4/4] Status webapp skipped")
+        print("[5/5] Status webapp skipped")
 
     print(
         "\nServer preparation complete.\n"
         "- Tools: installed\n"
+        "- Nginx: enabled and running\n"
         f"- Docker: {'skipped' if args.skip_docker else 'installed'}\n"
         f"- Hardening: {'skipped' if args.skip_hardening else 'applied'}\n"
         f"- SSH hardening: {'applied' if args.with_ssh_hardening and not args.skip_hardening else 'unchanged'}\n"

@@ -50,6 +50,7 @@ class PrepareServerTests(unittest.TestCase):
         run_checked.assert_has_calls(
             [
                 call(["python3", str(root / "scripts/ensure_server_tools.py"), "--skip-docker"], cwd=root),
+                call(["systemctl", "enable", "--now", "nginx"], cwd=root),
                 call(["python3", str(root / "scripts/setup_status_webapp.py"), "--root", str(root)], cwd=root),
             ]
         )
@@ -75,6 +76,8 @@ class PrepareServerTests(unittest.TestCase):
                                         self.module.main()
 
         status_installer = ["python3", str(root / "scripts/setup_status_webapp.py"), "--root", str(root)]
+        nginx_enable = ["systemctl", "enable", "--now", "nginx"]
+        self.assertIn(call(nginx_enable, cwd=root), run_checked.mock_calls)
         self.assertNotIn(call(status_installer, cwd=root), run_checked.mock_calls)
 
     def test_default_hardening_keeps_ssh_unchanged(self) -> None:

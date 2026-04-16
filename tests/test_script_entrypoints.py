@@ -126,6 +126,31 @@ class RunSelfChecksTests(unittest.TestCase):
         )
 
 
+class EnsureServerToolsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.module = load_module("ensure_server_tools.py")
+
+    def test_main_installs_nginx_in_baseline_package_set(self) -> None:
+        args = argparse.Namespace(skip_docker=True)
+
+        with patch.object(self.module, "parse_args", return_value=args):
+            with patch.object(self.module, "require_root"):
+                with patch.object(
+                    self.module.shutil,
+                    "which",
+                    side_effect=lambda name: "/usr/bin/apt-get" if name == "apt-get" else None,
+                ):
+                    with patch.object(self.module, "run_checked"):
+                        with patch.object(self.module, "install_pkgs") as install_pkgs:
+                            with patch.object(self.module, "install_or_update_bun"):
+                                with patch.object(self.module, "install_or_update_gh"):
+                                    with patch.object(self.module, "ensure_postgres_enabled"):
+                                        self.module.main()
+
+        baseline_packages = install_pkgs.call_args_list[0].args[0]
+        self.assertIn("nginx", baseline_packages)
+
+
 class SandboxEntrypointTests(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module("sandbox_entrypoint.py")
