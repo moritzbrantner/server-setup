@@ -175,7 +175,20 @@ def main() -> None:
     env["DEBIAN_FRONTEND"] = "noninteractive"
     run_checked(["apt-get", "upgrade", "-y"], env=env)
 
-    install_pkgs(["ca-certificates", "curl", "git", "jq", "unzip", "build-essential", "postgresql", "postgresql-client", "inotify-tools"])
+    install_pkgs(
+        [
+            "ca-certificates",
+            "curl",
+            "git",
+            "jq",
+            "unzip",
+            "build-essential",
+            "nginx",
+            "postgresql",
+            "postgresql-client",
+            "inotify-tools",
+        ]
+    )
     install_or_update_bun()
     install_or_update_gh()
     ensure_postgres_enabled()
@@ -185,7 +198,7 @@ def main() -> None:
     else:
         install_and_enable_docker()
 
-    log("Finished: tools, postgres, and docker bootstrap steps are complete.")
+    log("Finished: tools, nginx, postgres, and docker bootstrap steps are complete.")
 
 
 if __name__ == "__main__":

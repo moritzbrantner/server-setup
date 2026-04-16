@@ -24,6 +24,7 @@ sudo python3 ./scripts/prepare_server.py \
 
 What it does:
 - installs baseline packages and developer tools
+- installs, enables, and starts `nginx`
 - optionally applies unattended-upgrades/UFW/fail2ban hardening
 - installs the webhook receiver service
 - stores `DEFAULT_TLS_EMAIL` in `/etc/default/site-automation`

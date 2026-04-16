@@ -50,6 +50,7 @@ class PrepareServerTests(unittest.TestCase):
         run_checked.assert_has_calls(
             [
                 call(["python3", str(root / "scripts/ensure_server_tools.py"), "--skip-docker"], cwd=root),
+                call(["systemctl", "enable", "--now", "nginx"], cwd=root),
                 call(["python3", str(root / "scripts/setup_status_webapp.py"), "--root", str(root)], cwd=root),
             ]
         )
@@ -75,6 +76,8 @@ class PrepareServerTests(unittest.TestCase):
                                         self.module.main()
 
         status_installer = ["python3", str(root / "scripts/setup_status_webapp.py"), "--root", str(root)]
+        nginx_enable = ["systemctl", "enable", "--now", "nginx"]
+        self.assertIn(call(nginx_enable, cwd=root), run_checked.mock_calls)
         self.assertNotIn(call(status_installer, cwd=root), run_checked.mock_calls)
 
     def test_default_hardening_keeps_ssh_unchanged(self) -> None:
@@ -129,6 +132,39 @@ class PrepareServerTests(unittest.TestCase):
         self.assertIn(
             call(["python3", str(root / "scripts/harden_server.py"), "--configure-ssh"], cwd=root),
             run_checked.mock_calls,
+        )
+
+    def test_existing_tls_email_allows_repeat_run_without_email_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            args = argparse.Namespace(
+                email="",
+                skip_docker=True,
+                skip_hardening=True,
+                with_ssh_hardening=False,
+                with_status_webapp=False,
+            )
+
+            with patch.object(self.module, "parse_args", return_value=args):
+                with patch.object(self.module, "require_root"):
+                    with patch.object(self.module, "repo_root", return_value=root):
+                        with patch.object(
+                            self.module,
+                            "load_env_file",
+                            return_value={"DEFAULT_TLS_EMAIL": "existing@example.com"},
+                        ):
+                            with patch.object(self.module, "setup_automation_units"):
+                                with patch.object(self.module, "run_checked"):
+                                    with patch.object(self.module, "update_env_file") as update_env_file:
+                                        self.module.main()
+
+        update_env_file.assert_called_once_with(
+            self.module.AUTOMATION_ENV_FILE,
+            {
+                "REPO_ROOT": str(root),
+                "REGISTRY_PATH": str(root / "deploy/registry.json"),
+                "DEFAULT_TLS_EMAIL": "existing@example.com",
+            },
         )
 
 
