@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.env
+deploy/registry.json
+monitor/webapp/.next/
+monitor/webapp/node_modules/

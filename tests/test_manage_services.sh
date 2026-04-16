@@ -4,6 +4,35 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/lib/test-helpers.sh"
 
+write_registry_fixture() {
+  local registry_path="$1"
+  cat >"$registry_path" <<'JSON'
+[
+  {
+    "name": "tlm-deutschland",
+    "repo_url": "https://github.com/example/tlm-deutschland.git",
+    "branch": "main",
+    "checkout_path": "/srv/apps/tlm-deutschland",
+    "server_conf_path": "/srv/apps/tlm-deutschland/server.conf",
+    "service_name": "tlm-deutschland.service",
+    "domain": "tlm-deutschland.de",
+    "webhook_repo": "example/tlm-deutschland",
+    "managed_by": "deploy-repo",
+    "deploy_config": {
+      "name": "tlm-deutschland",
+      "domain": "tlm-deutschland.de",
+      "runtime": {
+        "mode": "service"
+      },
+      "service": {
+        "name": "tlm-deutschland.service"
+      }
+    }
+  }
+]
+JSON
+}
+
 make_stub_systemctl() {
   local bin_dir="$1"
   mkdir -p "$bin_dir"
@@ -69,13 +98,16 @@ SH
 
 test_manage_services_lists_unit_status_and_app_mapping() {
   local tmp
+  local registry_path
   tmp="$(make_temp_dir)"
+  registry_path="$tmp/registry.json"
   make_stub_systemctl "$tmp/bin"
+  write_registry_fixture "$registry_path"
 
   local output
   output="$(
     PATH="$tmp/bin:$PATH" \
-      python3 "$ROOT_DIR/scripts/manage_services.py" --config "$ROOT_DIR/deploy/registry.json"
+      python3 "$ROOT_DIR/scripts/manage_services.py" --config "$registry_path"
   )"
 
   grep -Fq 'SERVICE' <<<"$output"
@@ -89,13 +121,16 @@ test_manage_services_lists_unit_status_and_app_mapping() {
 
 test_manage_services_filters_and_runs_dry_run_action() {
   local tmp
+  local registry_path
   tmp="$(make_temp_dir)"
+  registry_path="$tmp/registry.json"
   make_stub_systemctl "$tmp/bin"
+  write_registry_fixture "$registry_path"
 
   local output
   output="$(
     PATH="$tmp/bin:$PATH" \
-      python3 "$ROOT_DIR/scripts/manage_services.py" restart --app tlm-deutschland --dry-run --config "$ROOT_DIR/deploy/registry.json"
+      python3 "$ROOT_DIR/scripts/manage_services.py" restart --app tlm-deutschland --dry-run --config "$registry_path"
   )"
 
   grep -Fq '+ systemctl restart tlm-deutschland.service' <<<"$output"

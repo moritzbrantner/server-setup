@@ -134,10 +134,23 @@ def run_checked(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] 
     return result
 
 
+def utc_timestamp() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def default_bun_install(env: dict[str, str]) -> str:
+    configured = (env.get("BUN_INSTALL") or "").strip()
+    if configured:
+        return configured
+    if os.geteuid() == 0:
+        return DEFAULT_BUN_INSTALL
+    home = (env.get("HOME") or str(Path.home())).strip()
+    return f"{home}/.bun" if home else DEFAULT_BUN_INSTALL
+
+
 def command_env() -> dict[str, str]:
     env = os.environ.copy()
-    home = env.get("HOME") or str(Path.home())
-    bun_install = env.get("BUN_INSTALL") or (f"{home}/.bun" if home else DEFAULT_BUN_INSTALL)
+    bun_install = default_bun_install(env)
     bun_bin = f"{bun_install}/bin"
     env["BUN_INSTALL"] = bun_install
     path_entries = env.get("PATH", "").split(os.pathsep) if env.get("PATH") else []
@@ -526,38 +539,67 @@ def deploy_registry_entry(
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         checkout_path = Path(str(entry["checkout_path"]))
         deploy_config = dict(entry["deploy_config"])
+        deploy_started_at = utc_timestamp()
         write_state(
             ctx,
             site_name,
-            last_deploy_timestamp=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            last_deploy_timestamp=deploy_started_at,
             last_deploy_status="running",
+            current_release=str(checkout_path),
+            checkout_path=str(checkout_path),
+            last_attempted_release=str(checkout_path),
         )
         ctx.log_event(site_name, "deploy", "running", str(checkout_path))
+        stage = "pre_deploy hook"
+        try:
+            run_optional(deploy_config["deploy_hooks"].get("pre_deploy"), cwd=checkout_path)
+            stage = "dependency install"
+            maybe_install_node_dependencies(
+                checkout_path,
+                deploy_config["deploy_hooks"].get("build"),
+                deploy_config["runtime"].get("command"),
+            )
+            stage = "build hook"
+            run_optional(deploy_config["deploy_hooks"].get("build"), cwd=checkout_path)
+            stage = "runtime service"
+            ensure_runtime_service(ctx, site_name, deploy_config, checkout_path)
+            stage = "health check"
+            wait_for_service_health(deploy_config)
+            stage = "nginx config"
+            apply_nginx_site_config(ctx, site_name, deploy_config, checkout_path)
+            include_www = deploy_config["nginx"]["www_redirect"] or f"www.{deploy_config['domain']}" in deploy_config["nginx"]["tls_hostnames"]
+            stage = "dns verification"
+            ensure_dns_points_here(deploy_config["domain"], include_www=include_www)
+            stage = "tls setup"
+            run_checked(
+                [
+                    "python3",
+                    str(Path(__file__).resolve().parent / "setup_letsencrypt.py"),
+                    "--domain",
+                    deploy_config["domain"],
+                    "--email",
+                    tls_email,
+                    *(["--www"] if include_www else []),
+                ]
+            )
+            stage = "post_deploy hook"
+            run_optional(deploy_config["deploy_hooks"].get("post_deploy"), cwd=checkout_path)
+        except Exception as exc:
+            failure_reason = str(exc).strip()
+            failure_message = f"{stage}: {failure_reason}" if failure_reason else stage
+            write_state(
+                ctx,
+                site_name,
+                last_deploy_status="failed",
+                current_release=str(checkout_path),
+                checkout_path=str(checkout_path),
+                last_attempted_release=str(checkout_path),
+                last_failure_reason=failure_message,
+                last_failure_at=utc_timestamp(),
+            )
+            ctx.log_event(site_name, "deploy", "failed", failure_message, level="error")
+            raise
 
-        run_optional(deploy_config["deploy_hooks"].get("pre_deploy"), cwd=checkout_path)
-        maybe_install_node_dependencies(
-            checkout_path,
-            deploy_config["deploy_hooks"].get("build"),
-            deploy_config["runtime"].get("command"),
-        )
-        run_optional(deploy_config["deploy_hooks"].get("build"), cwd=checkout_path)
-        ensure_runtime_service(ctx, site_name, deploy_config, checkout_path)
-        wait_for_service_health(deploy_config)
-        apply_nginx_site_config(ctx, site_name, deploy_config, checkout_path)
-        include_www = deploy_config["nginx"]["www_redirect"] or f"www.{deploy_config['domain']}" in deploy_config["nginx"]["tls_hostnames"]
-        ensure_dns_points_here(deploy_config["domain"], include_www=include_www)
-        run_checked(
-            [
-                "python3",
-                str(Path(__file__).resolve().parent / "setup_letsencrypt.py"),
-                "--domain",
-                deploy_config["domain"],
-                "--email",
-                tls_email,
-                *(["--www"] if include_www else []),
-            ]
-        )
-        run_optional(deploy_config["deploy_hooks"].get("post_deploy"), cwd=checkout_path)
         write_state(
             ctx,
             site_name,
@@ -565,6 +607,9 @@ def deploy_registry_entry(
             current_release=str(checkout_path),
             last_successful_release=str(checkout_path),
             checkout_path=str(checkout_path),
+            last_success_at=utc_timestamp(),
+            last_failure_reason=None,
+            last_failure_at=None,
         )
 
         hook_status = ("skipped", "webhook setup was skipped")

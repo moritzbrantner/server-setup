@@ -1,5 +1,9 @@
 .git
 .gitignore
+__pycache__
+*.pyc
+.env
+deploy/registry.json
 deploy/sites.json
 monitor/webapp/.next
 monitor/webapp/node_modules

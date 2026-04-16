@@ -50,6 +50,38 @@ class DeployEngineTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
+    def _service_entry(self, checkout: pathlib.Path) -> dict:
+        return {
+            "name": "service-app",
+            "repo_url": "https://github.com/example/service-app.git",
+            "branch": "main",
+            "checkout_path": str(checkout),
+            "server_conf_path": str(checkout / "server.conf"),
+            "service_name": "service-app.service",
+            "domain": "service.example.com",
+            "webhook_repo": "example/service-app",
+            "managed_by": "deploy-repo",
+            "deploy_config": {
+                "name": "service-app",
+                "domain": "service.example.com",
+                "build_output": ".",
+                "web_root": None,
+                "deploy_hooks": {"pre_deploy": None, "build": None, "post_deploy": None},
+                "runtime": {
+                    "mode": "service",
+                    "working_dir": ".",
+                    "user": "root",
+                    "health_endpoint": "/health",
+                    "health_retries": 1,
+                    "health_interval_seconds": 1,
+                    "command": "PORT=3000 bun run start",
+                    "port": 3000,
+                },
+                "service": {"name": "service-app.service"},
+                "nginx": {"www_redirect": False, "tls_hostnames": ["service.example.com"]},
+            },
+        }
+
     def test_deploy_registry_entry_succeeds_for_static_site(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = self._base_env(tmp)
@@ -113,36 +145,7 @@ class DeployEngineTests(unittest.TestCase):
             pathlib.Path(env["LETSENCRYPT_DHPARAM_PATH"]).write_text("dhparam", encoding="utf-8")
             checkout = pathlib.Path(tmp) / "app"
             checkout.mkdir()
-            entry = {
-                "name": "service-app",
-                "repo_url": "https://github.com/example/service-app.git",
-                "branch": "main",
-                "checkout_path": str(checkout),
-                "server_conf_path": str(checkout / "server.conf"),
-                "service_name": "service-app.service",
-                "domain": "service.example.com",
-                "webhook_repo": "example/service-app",
-                "managed_by": "deploy-repo",
-                "deploy_config": {
-                    "name": "service-app",
-                    "domain": "service.example.com",
-                    "build_output": ".",
-                    "web_root": None,
-                    "deploy_hooks": {"pre_deploy": None, "build": None, "post_deploy": None},
-                    "runtime": {
-                        "mode": "service",
-                        "working_dir": ".",
-                        "user": "root",
-                        "health_endpoint": "/health",
-                        "health_retries": 1,
-                        "health_interval_seconds": 1,
-                        "command": "PORT=3000 bun run start",
-                        "port": 3000,
-                    },
-                    "service": {"name": "service-app.service"},
-                    "nginx": {"www_redirect": False, "tls_hostnames": ["service.example.com"]},
-                },
-            }
+            entry = self._service_entry(checkout)
 
             with patch.dict(os.environ, env, clear=False):
                 with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")):
@@ -154,13 +157,45 @@ class DeployEngineTests(unittest.TestCase):
             unit_path = pathlib.Path(env["SYSTEMD_UNIT_DIR"]) / "service-app.service"
             self.assertTrue(unit_path.exists())
             self.assertIn("PORT=3000 bun run start", unit_path.read_text(encoding="utf-8"))
+            state_path = pathlib.Path(env["STATE_DIR"]) / "service-app.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["current_release"], str(checkout))
+            self.assertEqual(state["checkout_path"], str(checkout))
+            self.assertEqual(state["last_attempted_release"], str(checkout))
+            self.assertEqual(state["last_deploy_status"], "success")
+            self.assertIn("last_success_at", state)
+            self.assertIsNone(state["last_failure_reason"])
+            self.assertIsNone(state["last_failure_at"])
+
+    def test_command_env_prefers_explicit_bun_install(self) -> None:
+        with patch.dict(os.environ, {"BUN_INSTALL": "/custom/bun", "PATH": "/usr/bin"}, clear=True):
+            with patch.object(self.module.os, "geteuid", return_value=0):
+                env = self.module.command_env()
+
+        self.assertEqual(env["BUN_INSTALL"], "/custom/bun")
+        self.assertTrue(env["PATH"].startswith("/custom/bun/bin:"))
+
+    def test_command_env_uses_root_default_when_running_as_root(self) -> None:
+        with patch.dict(os.environ, {"HOME": "/home/demo", "PATH": "/usr/bin"}, clear=True):
+            with patch.object(self.module.os, "geteuid", return_value=0):
+                env = self.module.command_env()
+
+        self.assertEqual(env["BUN_INSTALL"], "/root/.bun")
+
+    def test_command_env_uses_home_default_for_non_root_users(self) -> None:
+        with patch.dict(os.environ, {"HOME": "/home/demo", "PATH": "/usr/bin"}, clear=True):
+            with patch.object(self.module.os, "geteuid", return_value=1000):
+                env = self.module.command_env()
+
+        self.assertEqual(env["BUN_INSTALL"], "/home/demo/.bun")
 
     def test_run_optional_uses_bun_aware_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = pathlib.Path(tmp)
-            with patch.dict(os.environ, {"HOME": "/root", "PATH": "/usr/bin"}, clear=False):
-                with patch.object(self.module, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run_mock:
-                    self.module.run_optional("bun run build", cwd=checkout)
+            with patch.dict(os.environ, {"HOME": "/root", "PATH": "/usr/bin"}, clear=True):
+                with patch.object(self.module.os, "geteuid", return_value=0):
+                    with patch.object(self.module, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run_mock:
+                        self.module.run_optional("bun run build", cwd=checkout)
 
         _, kwargs = run_mock.call_args
         self.assertEqual(kwargs["cwd"], checkout)
@@ -174,14 +209,132 @@ class DeployEngineTests(unittest.TestCase):
             (checkout / "package.json").write_text("{}", encoding="utf-8")
             (checkout / "bun.lock").write_text("", encoding="utf-8")
 
-            with patch.dict(os.environ, {"HOME": "/root", "PATH": "/usr/bin"}, clear=False):
-                with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")) as run_checked_mock:
-                    self.module.maybe_install_node_dependencies(checkout, "bun run build", "bun run start")
+            with patch.dict(os.environ, {"HOME": "/root", "PATH": "/usr/bin"}, clear=True):
+                with patch.object(self.module.os, "geteuid", return_value=0):
+                    with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")) as run_checked_mock:
+                        self.module.maybe_install_node_dependencies(checkout, "bun run build", "bun run start")
 
         args, kwargs = run_checked_mock.call_args
         self.assertEqual(args[0], ["bun", "install"])
         self.assertEqual(kwargs["cwd"], checkout)
         self.assertEqual(kwargs["env"]["BUN_INSTALL"], "/root/.bun")
+
+    def test_deploy_registry_entry_records_build_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._base_env(tmp)
+            pathlib.Path(env["NGINX_SITE_AVAILABLE_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["NGINX_SITE_ENABLED_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).write_text("ssl", encoding="utf-8")
+            pathlib.Path(env["LETSENCRYPT_DHPARAM_PATH"]).write_text("dhparam", encoding="utf-8")
+            checkout = pathlib.Path(tmp) / "app"
+            checkout.mkdir()
+            entry = self._service_entry(checkout)
+            entry["deploy_config"]["deploy_hooks"]["build"] = "bun run build"
+
+            def run_optional_side_effect(cmd, *, cwd):
+                if cmd == "bun run build":
+                    raise self.module.DeployError("build failed")
+
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")):
+                    with patch.object(self.module, "run", side_effect=self._run_side_effect):
+                        with patch.object(self.module, "run_optional", side_effect=run_optional_side_effect):
+                            with self.assertRaises(self.module.DeployError):
+                                self.module.deploy_registry_entry(entry, tls_email="ops@example.com", configure_webhook=False)
+
+            state = json.loads((pathlib.Path(env["STATE_DIR"]) / "service-app.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["last_deploy_status"], "failed")
+            self.assertEqual(state["last_attempted_release"], str(checkout))
+            self.assertEqual(state["current_release"], str(checkout))
+            self.assertEqual(state["checkout_path"], str(checkout))
+            self.assertIn("build hook: build failed", state["last_failure_reason"])
+            self.assertIn("last_failure_at", state)
+
+    def test_deploy_registry_entry_records_health_check_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._base_env(tmp)
+            pathlib.Path(env["NGINX_SITE_AVAILABLE_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["NGINX_SITE_ENABLED_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).write_text("ssl", encoding="utf-8")
+            pathlib.Path(env["LETSENCRYPT_DHPARAM_PATH"]).write_text("dhparam", encoding="utf-8")
+            checkout = pathlib.Path(tmp) / "app"
+            checkout.mkdir()
+            entry = self._service_entry(checkout)
+
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")):
+                    with patch.object(self.module, "run", side_effect=self._run_side_effect):
+                        with patch.object(self.module, "ensure_dns_points_here", return_value=None):
+                            with patch.object(self.module, "wait_for_service_health", side_effect=self.module.DeployError("health timed out")):
+                                with self.assertRaises(self.module.DeployError):
+                                    self.module.deploy_registry_entry(entry, tls_email="ops@example.com", configure_webhook=False)
+
+            state = json.loads((pathlib.Path(env["STATE_DIR"]) / "service-app.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["last_deploy_status"], "failed")
+            self.assertIn("health check: health timed out", state["last_failure_reason"])
+
+    def test_deploy_registry_entry_records_nginx_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._base_env(tmp)
+            pathlib.Path(env["NGINX_SITE_AVAILABLE_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["NGINX_SITE_ENABLED_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).write_text("ssl", encoding="utf-8")
+            pathlib.Path(env["LETSENCRYPT_DHPARAM_PATH"]).write_text("dhparam", encoding="utf-8")
+            checkout = pathlib.Path(tmp) / "app"
+            checkout.mkdir()
+            entry = self._service_entry(checkout)
+
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")):
+                    with patch.object(self.module, "run", side_effect=self._run_side_effect):
+                        with patch.object(self.module, "ensure_dns_points_here", return_value=None):
+                            with patch.object(self.module, "apply_nginx_site_config", side_effect=self.module.DeployError("nginx validation failed")):
+                                with self.assertRaises(self.module.DeployError):
+                                    self.module.deploy_registry_entry(entry, tls_email="ops@example.com", configure_webhook=False)
+
+            state = json.loads((pathlib.Path(env["STATE_DIR"]) / "service-app.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["last_deploy_status"], "failed")
+            self.assertIn("nginx config: nginx validation failed", state["last_failure_reason"])
+
+    def test_successful_deploy_clears_previous_failure_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._base_env(tmp)
+            pathlib.Path(env["NGINX_SITE_AVAILABLE_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["NGINX_SITE_ENABLED_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).write_text("ssl", encoding="utf-8")
+            pathlib.Path(env["LETSENCRYPT_DHPARAM_PATH"]).write_text("dhparam", encoding="utf-8")
+            checkout = pathlib.Path(tmp) / "app"
+            checkout.mkdir()
+            entry = self._service_entry(checkout)
+            state_path = pathlib.Path(env["STATE_DIR"]) / "service-app.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "site": "service-app",
+                        "last_deploy_status": "failed",
+                        "last_failure_reason": "old failure",
+                        "last_failure_at": "2026-01-01T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(self.module, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run_mock:
+                    with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")):
+                        with patch.object(self.module, "ensure_dns_points_here", return_value=None):
+                            self.module.deploy_registry_entry(entry, tls_email="ops@example.com", configure_webhook=False)
+
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["last_deploy_status"], "success")
+            self.assertIsNone(state["last_failure_reason"])
+            self.assertIsNone(state["last_failure_at"])
+            self.assertIn("last_success_at", state)
 
     def test_maybe_install_node_dependencies_skips_when_build_hook_installs_already(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
