@@ -105,6 +105,24 @@ class DeployContext:
             handle.write(f"{line}\n")
 
 
+@dataclasses.dataclass(frozen=True)
+class RuntimeServiceSnapshot:
+    unit_path: Path
+    service_name: str
+    existed: bool
+    content: str
+
+
+@dataclasses.dataclass(frozen=True)
+class NginxSiteSnapshot:
+    conf_path: Path
+    link_path: Path
+    existed: bool
+    content: str
+    link_existed: bool
+    link_target: str
+
+
 def repo_basename(repo_url: str) -> str:
     if repo_url.startswith("git@"):
         return Path(repo_url.rsplit(":", 1)[-1]).name.removesuffix(".git")
@@ -442,6 +460,36 @@ def ensure_runtime_service(ctx: DeployContext, site_name: str, deploy_config: di
     run_checked(["systemctl", "restart", deploy_config["service"]["name"]])
 
 
+def capture_runtime_service_snapshot(ctx: DeployContext, deploy_config: dict) -> RuntimeServiceSnapshot | None:
+    runtime = deploy_config["runtime"]
+    if runtime["mode"] != "service":
+        return None
+    service_name = deploy_config["service"]["name"]
+    unit_path = ctx.systemd_unit_dir / service_name
+    return RuntimeServiceSnapshot(
+        unit_path=unit_path,
+        service_name=service_name,
+        existed=unit_path.exists(),
+        content=unit_path.read_text(encoding="utf-8") if unit_path.exists() else "",
+    )
+
+
+def restore_runtime_service_snapshot(snapshot: RuntimeServiceSnapshot | None) -> bool:
+    if snapshot is None:
+        return False
+    if snapshot.existed:
+        write_if_changed(snapshot.unit_path, snapshot.content)
+    elif snapshot.unit_path.exists():
+        snapshot.unit_path.unlink()
+    run_checked(["systemctl", "daemon-reload"])
+    if snapshot.existed:
+        run_checked(["systemctl", "restart", snapshot.service_name])
+    else:
+        run(["systemctl", "stop", snapshot.service_name])
+        run(["systemctl", "disable", snapshot.service_name])
+    return True
+
+
 def wait_for_service_health(deploy_config: dict) -> None:
     runtime = deploy_config["runtime"]
     if runtime["mode"] != "service":
@@ -452,6 +500,41 @@ def wait_for_service_health(deploy_config: dict) -> None:
             return
         time.sleep(runtime["health_interval_seconds"])
     raise DeployError(f"Health check failed for {deploy_config['name']}: {url}")
+
+
+def capture_nginx_site_snapshot(ctx: DeployContext, site_name: str) -> NginxSiteSnapshot:
+    conf_path = ctx.nginx_site_available_dir / f"{site_name}.conf"
+    link_path = ctx.nginx_site_enabled_dir / f"{site_name}.conf"
+    return NginxSiteSnapshot(
+        conf_path=conf_path,
+        link_path=link_path,
+        existed=conf_path.exists(),
+        content=conf_path.read_text(encoding="utf-8") if conf_path.exists() else "",
+        link_existed=link_path.exists() or link_path.is_symlink(),
+        link_target=os.readlink(link_path) if link_path.is_symlink() else "",
+    )
+
+
+def restore_nginx_site_snapshot(snapshot: NginxSiteSnapshot | None) -> bool:
+    if snapshot is None:
+        return False
+    if snapshot.existed:
+        write_if_changed(snapshot.conf_path, snapshot.content)
+    elif snapshot.conf_path.exists():
+        snapshot.conf_path.unlink()
+
+    if snapshot.link_path.exists() or snapshot.link_path.is_symlink():
+        snapshot.link_path.unlink()
+    if snapshot.link_existed:
+        if snapshot.link_target:
+            os.symlink(snapshot.link_target, snapshot.link_path)
+        elif snapshot.conf_path.exists():
+            os.symlink(snapshot.conf_path, snapshot.link_path)
+
+    if run(["nginx", "-t"]).returncode != 0:
+        raise DeployError(f"Restored nginx config failed validation: {snapshot.conf_path}")
+    run_checked(["systemctl", "reload", "nginx"])
+    return True
 
 
 def apply_nginx_site_config(ctx: DeployContext, site_name: str, deploy_config: dict, checkout_path: Path) -> None:
@@ -521,6 +604,44 @@ def write_state(ctx: DeployContext, site_name: str, **updates: object) -> None:
     path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
 
 
+def read_state(ctx: DeployContext, site_name: str) -> dict:
+    path = ctx.state_file(site_name)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def previous_successful_release(previous_state: dict) -> str | None:
+    release = previous_state.get("last_successful_release")
+    if isinstance(release, str) and release.strip():
+        return release
+    if previous_state.get("last_deploy_status") == "success":
+        current = previous_state.get("current_release")
+        if isinstance(current, str) and current.strip():
+            return current
+    return None
+
+
+def rollback_deployment(
+    ctx: DeployContext,
+    site_name: str,
+    service_snapshot: RuntimeServiceSnapshot | None,
+    nginx_snapshot: NginxSiteSnapshot | None,
+    reason: str,
+) -> tuple[str, str | None]:
+    attempted = False
+    try:
+        attempted = restore_runtime_service_snapshot(service_snapshot) or attempted
+        attempted = restore_nginx_site_snapshot(nginx_snapshot) or attempted
+    except Exception as exc:
+        ctx.log_event(site_name, "rollback", "failed", f"{reason}: {exc}", level="error")
+        return ("failed", f"{reason}: {exc}")
+    if attempted:
+        ctx.log_event(site_name, "rollback", "succeeded", reason)
+        return ("succeeded", reason)
+    return ("not_needed", None)
+
+
 def deploy_registry_entry(
     entry: dict,
     *,
@@ -540,17 +661,24 @@ def deploy_registry_entry(
         checkout_path = Path(str(entry["checkout_path"]))
         deploy_config = dict(entry["deploy_config"])
         deploy_started_at = utc_timestamp()
+        previous_state = read_state(ctx, site_name)
+        previous_release = previous_successful_release(previous_state)
         write_state(
             ctx,
             site_name,
             last_deploy_timestamp=deploy_started_at,
             last_deploy_status="running",
-            current_release=str(checkout_path),
+            current_release=previous_state.get("current_release") or str(checkout_path),
             checkout_path=str(checkout_path),
             last_attempted_release=str(checkout_path),
+            previous_successful_release=previous_release,
+            rollback_status="not_needed",
+            rollback_reason=None,
         )
         ctx.log_event(site_name, "deploy", "running", str(checkout_path))
         stage = "pre_deploy hook"
+        service_snapshot = None
+        nginx_snapshot = None
         try:
             run_optional(deploy_config["deploy_hooks"].get("pre_deploy"), cwd=checkout_path)
             stage = "dependency install"
@@ -562,10 +690,12 @@ def deploy_registry_entry(
             stage = "build hook"
             run_optional(deploy_config["deploy_hooks"].get("build"), cwd=checkout_path)
             stage = "runtime service"
+            service_snapshot = capture_runtime_service_snapshot(ctx, deploy_config)
             ensure_runtime_service(ctx, site_name, deploy_config, checkout_path)
             stage = "health check"
             wait_for_service_health(deploy_config)
             stage = "nginx config"
+            nginx_snapshot = capture_nginx_site_snapshot(ctx, site_name)
             apply_nginx_site_config(ctx, site_name, deploy_config, checkout_path)
             include_www = deploy_config["nginx"]["www_redirect"] or f"www.{deploy_config['domain']}" in deploy_config["nginx"]["tls_hostnames"]
             stage = "dns verification"
@@ -587,15 +717,25 @@ def deploy_registry_entry(
         except Exception as exc:
             failure_reason = str(exc).strip()
             failure_message = f"{stage}: {failure_reason}" if failure_reason else stage
+            rollback_status, rollback_reason = rollback_deployment(
+                ctx,
+                site_name,
+                service_snapshot,
+                nginx_snapshot,
+                failure_message,
+            )
             write_state(
                 ctx,
                 site_name,
                 last_deploy_status="failed",
-                current_release=str(checkout_path),
+                current_release=previous_state.get("current_release") or str(checkout_path),
                 checkout_path=str(checkout_path),
                 last_attempted_release=str(checkout_path),
+                previous_successful_release=previous_release,
                 last_failure_reason=failure_message,
                 last_failure_at=utc_timestamp(),
+                rollback_status=rollback_status,
+                rollback_reason=rollback_reason,
             )
             ctx.log_event(site_name, "deploy", "failed", failure_message, level="error")
             raise
@@ -607,9 +747,12 @@ def deploy_registry_entry(
             current_release=str(checkout_path),
             last_successful_release=str(checkout_path),
             checkout_path=str(checkout_path),
+            previous_successful_release=previous_release,
             last_success_at=utc_timestamp(),
             last_failure_reason=None,
             last_failure_at=None,
+            rollback_status="not_needed",
+            rollback_reason=None,
         )
 
         hook_status = ("skipped", "webhook setup was skipped")

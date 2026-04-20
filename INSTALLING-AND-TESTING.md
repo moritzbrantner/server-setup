@@ -17,6 +17,12 @@ Run the default validation suite:
 ./tests/run-tests.sh
 ```
 
+Equivalent Make target:
+
+```bash
+make test
+```
+
 That suite includes:
 - shell linting with ShellCheck
 - status webapp TypeScript typechecking
@@ -36,10 +42,22 @@ Run only the status webapp tests:
 ./tests/test_status_webapp_frontend.sh
 ```
 
+Equivalent Make target:
+
+```bash
+make webapp-test
+```
+
 Run lint and static checks only:
 
 ```bash
 ./tests/run-lint.sh
+```
+
+Equivalent Make target:
+
+```bash
+make lint
 ```
 
 Run the self-check wrapper:
@@ -91,7 +109,24 @@ TLM_DEUTSCHLAND_GITHUB_TOKEN=github_pat_... \
   ./tests/test_docker_sandbox.sh
 ```
 
+Equivalent Make target after setting `TLM_DEUTSCHLAND_GITHUB_TOKEN` and `IMAGE_NAME`:
+
+```bash
+make docker-sandbox-test
+```
+
 This check is intentionally outside `./tests/run-tests.sh` because it needs privileged Docker, systemd-in-container support, network access, and a GitHub token with access to the deployment test repository. If `TLM_DEUTSCHLAND_GITHUB_TOKEN` is not set, the script reports a skip instead of failing.
+
+## Release checklist
+
+Before merging or tagging a release:
+
+1. Run `make lint`.
+2. Run `make test`.
+3. Confirm `git status --short` contains only intentional tracked changes.
+4. If Docker, network access, and `TLM_DEUTSCHLAND_GITHUB_TOKEN` are available, run the optional Docker sandbox integration check.
+5. Review `CHANGELOG.md` and move relevant `Unreleased` notes into the release entry.
+6. Confirm no generated host state, secrets, `.env` files, `node_modules`, `.next`, or `tsconfig.tsbuildinfo` files are staged.
 
 ## Examples
 

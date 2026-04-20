@@ -107,9 +107,12 @@ Each state file includes:
 - `current_release`
 - `checkout_path`
 - `last_attempted_release`
+- `previous_successful_release`
+- `rollback_status`
+- `rollback_reason`
 
 Failed deploys also record `last_failure_reason` and `last_failure_at`.
-Successful deploys record `last_success_at` and clear stale failure metadata.
+Successful deploys record `last_success_at` and clear stale failure and rollback metadata. When a deploy fails after service or nginx configuration changes have started, the deploy engine attempts to restore the previous app service unit and nginx site config before recording the failure.
 
 ## `server.conf`
 
@@ -222,6 +225,35 @@ Preview purge:
 ```bash
 sudo python3 ./scripts/shutdown_server.py --purge --dry-run
 ```
+
+## Troubleshooting
+
+Webhook does not trigger:
+- confirm `site-webhook-receiver.service` is active with `systemctl status site-webhook-receiver.service`
+- confirm `/etc/default/site-automation` contains `WEBHOOK_SECRET`, `WEBHOOK_ALLOWED_REPOS`, `WEBHOOK_ALLOWED_BRANCHES`, `REGISTRY_PATH`, and `DEFAULT_TLS_EMAIL`
+- confirm the GitHub webhook payload URL matches `WEBHOOK_PATH` and the public host/port that reaches the receiver
+- check `/var/log/server-setup/webhook-*.log` for rejected signatures, unmatched repos, or unmatched branches
+
+Webhook triggers but old code is served:
+- check `/var/log/server-setup/webhook-*.log` for `checkout refresh` and `registry refresh` events
+- confirm `deploy/registry.json` points at the expected `checkout_path`, `branch`, and `webhook_repo`
+- run `sudo python3 ./scripts/repair_site.py --site your-app` to refresh the checkout, registry metadata, automation env, and deploy state through the same deploy engine
+
+TLS setup fails:
+- confirm `DEFAULT_TLS_EMAIL` is set in `/etc/default/site-automation`
+- confirm the domain resolves to this server before retrying
+- run `sudo certbot certificates` and inspect `/var/log/letsencrypt/letsencrypt.log`
+- rerun repair after DNS and certificate issues are resolved
+
+DNS verification fails:
+- confirm the domain's A/AAAA records point at the server's public IP
+- if using managed DNS, confirm `dns.provider` and `dns.zone` in `server.conf`, then set the matching provider credentials in `/etc/default/server-setup-status-webapp`
+- restart `server-setup-status-webapp.service` after changing DNS provider credentials
+
+Status webapp admin token is missing:
+- set `STATUS_WEBAPP_ADMIN_TOKEN` in `/etc/default/server-setup-status-webapp`
+- restart with `sudo systemctl restart server-setup-status-webapp.service`
+- use the same token in the dashboard token field or send it as the `x-status-admin-token` API header
 
 ## Legacy Migration
 

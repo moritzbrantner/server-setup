@@ -274,6 +274,49 @@ class DeployEngineTests(unittest.TestCase):
             state = json.loads((pathlib.Path(env["STATE_DIR"]) / "service-app.json").read_text(encoding="utf-8"))
             self.assertEqual(state["last_deploy_status"], "failed")
             self.assertIn("health check: health timed out", state["last_failure_reason"])
+            self.assertEqual(state["rollback_status"], "succeeded")
+            self.assertIn("health check: health timed out", state["rollback_reason"])
+
+    def test_health_failure_preserves_previous_successful_release(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._base_env(tmp)
+            pathlib.Path(env["NGINX_SITE_AVAILABLE_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["NGINX_SITE_ENABLED_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).write_text("ssl", encoding="utf-8")
+            pathlib.Path(env["LETSENCRYPT_DHPARAM_PATH"]).write_text("dhparam", encoding="utf-8")
+            checkout = pathlib.Path(tmp) / "app"
+            checkout.mkdir()
+            entry = self._service_entry(checkout)
+            previous_release = "/srv/apps/app-previous"
+            state_path = pathlib.Path(env["STATE_DIR"]) / "service-app.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "site": "service-app",
+                        "last_deploy_status": "success",
+                        "current_release": previous_release,
+                        "last_successful_release": previous_release,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")):
+                    with patch.object(self.module, "run", side_effect=self._run_side_effect):
+                        with patch.object(self.module, "ensure_dns_points_here", return_value=None):
+                            with patch.object(self.module, "wait_for_service_health", side_effect=self.module.DeployError("health timed out")):
+                                with self.assertRaises(self.module.DeployError):
+                                    self.module.deploy_registry_entry(entry, tls_email="ops@example.com", configure_webhook=False)
+
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["last_deploy_status"], "failed")
+            self.assertEqual(state["current_release"], previous_release)
+            self.assertEqual(state["last_successful_release"], previous_release)
+            self.assertEqual(state["previous_successful_release"], previous_release)
+            self.assertEqual(state["last_attempted_release"], str(checkout))
 
     def test_deploy_registry_entry_records_nginx_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -298,6 +341,98 @@ class DeployEngineTests(unittest.TestCase):
             state = json.loads((pathlib.Path(env["STATE_DIR"]) / "service-app.json").read_text(encoding="utf-8"))
             self.assertEqual(state["last_deploy_status"], "failed")
             self.assertIn("nginx config: nginx validation failed", state["last_failure_reason"])
+            self.assertEqual(state["rollback_status"], "succeeded")
+
+    def test_nginx_validation_failure_restores_previous_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._base_env(tmp)
+            available_dir = pathlib.Path(env["NGINX_SITE_AVAILABLE_DIR"])
+            enabled_dir = pathlib.Path(env["NGINX_SITE_ENABLED_DIR"])
+            available_dir.mkdir(parents=True, exist_ok=True)
+            enabled_dir.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).write_text("ssl", encoding="utf-8")
+            pathlib.Path(env["LETSENCRYPT_DHPARAM_PATH"]).write_text("dhparam", encoding="utf-8")
+            checkout = pathlib.Path(tmp) / "app"
+            (checkout / "public").mkdir(parents=True)
+            (checkout / "public" / "index.html").write_text("ok", encoding="utf-8")
+            old_conf = "server {\n    listen 80;\n    server_name old.example.com;\n}\n"
+            conf_path = available_dir / "static-app.conf"
+            conf_path.write_text(old_conf, encoding="utf-8")
+            os.symlink(conf_path, enabled_dir / "static-app.conf")
+            entry = {
+                "name": "static-app",
+                "repo_url": "https://github.com/example/static-app.git",
+                "branch": "main",
+                "checkout_path": str(checkout),
+                "server_conf_path": str(checkout / "server.conf"),
+                "service_name": "static-app.service",
+                "domain": "static.example.com",
+                "webhook_repo": "example/static-app",
+                "managed_by": "deploy-repo",
+                "deploy_config": {
+                    "name": "static-app",
+                    "domain": "static.example.com",
+                    "build_output": "public",
+                    "web_root": None,
+                    "deploy_hooks": {"pre_deploy": None, "build": None, "post_deploy": None},
+                    "runtime": {
+                        "mode": "static",
+                        "working_dir": ".",
+                        "user": "root",
+                        "health_endpoint": "/health",
+                        "health_retries": 1,
+                        "health_interval_seconds": 1,
+                    },
+                    "service": {"name": "static-app.service"},
+                    "nginx": {"www_redirect": False, "tls_hostnames": ["static.example.com"]},
+                },
+            }
+            nginx_checks = iter([1, 0])
+
+            def run_side_effect(cmd, cwd=None, env=None, capture=False):
+                if cmd[:2] == ["nginx", "-t"]:
+                    return subprocess.CompletedProcess(cmd, next(nginx_checks), stdout="", stderr="")
+                return self._run_side_effect(cmd, cwd=cwd, env=env, capture=capture)
+
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")):
+                    with patch.object(self.module, "run", side_effect=run_side_effect):
+                        with self.assertRaises(self.module.DeployError):
+                            self.module.deploy_registry_entry(entry, tls_email="ops@example.com", configure_webhook=False)
+
+            state = json.loads((pathlib.Path(env["STATE_DIR"]) / "static-app.json").read_text(encoding="utf-8"))
+            self.assertEqual(conf_path.read_text(encoding="utf-8"), old_conf)
+            self.assertEqual(state["rollback_status"], "succeeded")
+            self.assertIn("nginx config", state["rollback_reason"])
+
+    def test_failed_rollback_is_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._base_env(tmp)
+            pathlib.Path(env["NGINX_SITE_AVAILABLE_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["NGINX_SITE_ENABLED_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["LETSENCRYPT_OPTIONS_PATH"]).write_text("ssl", encoding="utf-8")
+            pathlib.Path(env["LETSENCRYPT_DHPARAM_PATH"]).write_text("dhparam", encoding="utf-8")
+            checkout = pathlib.Path(tmp) / "app"
+            checkout.mkdir()
+            entry = self._service_entry(checkout)
+
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")):
+                    with patch.object(self.module, "run", side_effect=self._run_side_effect):
+                        with patch.object(self.module, "wait_for_service_health", side_effect=self.module.DeployError("health timed out")):
+                            with patch.object(
+                                self.module,
+                                "restore_runtime_service_snapshot",
+                                side_effect=self.module.DeployError("restore failed"),
+                            ):
+                                with self.assertRaises(self.module.DeployError):
+                                    self.module.deploy_registry_entry(entry, tls_email="ops@example.com", configure_webhook=False)
+
+            state = json.loads((pathlib.Path(env["STATE_DIR"]) / "service-app.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["rollback_status"], "failed")
+            self.assertIn("restore failed", state["rollback_reason"])
 
     def test_successful_deploy_clears_previous_failure_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -319,6 +454,9 @@ class DeployEngineTests(unittest.TestCase):
                         "last_deploy_status": "failed",
                         "last_failure_reason": "old failure",
                         "last_failure_at": "2026-01-01T00:00:00Z",
+                        "last_successful_release": "/srv/apps/previous",
+                        "rollback_status": "failed",
+                        "rollback_reason": "old rollback failure",
                     }
                 ),
                 encoding="utf-8",
@@ -335,6 +473,9 @@ class DeployEngineTests(unittest.TestCase):
             self.assertIsNone(state["last_failure_reason"])
             self.assertIsNone(state["last_failure_at"])
             self.assertIn("last_success_at", state)
+            self.assertEqual(state["previous_successful_release"], "/srv/apps/previous")
+            self.assertEqual(state["rollback_status"], "not_needed")
+            self.assertIsNone(state["rollback_reason"])
 
     def test_maybe_install_node_dependencies_skips_when_build_hook_installs_already(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

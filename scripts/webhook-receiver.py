@@ -11,7 +11,14 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from deploy_engine import build_registry_entry, clone_or_update_checkout, deploy_registry_entry
+from deploy_engine import (
+    DeployContext,
+    build_registry_entry,
+    clone_or_update_checkout,
+    deploy_registry_entry,
+    utc_timestamp,
+    write_state,
+)
 from registry_contract import DEFAULT_REGISTRY_PATH, find_registry_entry_by_push
 
 WEBHOOK_HOST = os.environ.get("WEBHOOK_HOST", "0.0.0.0")
@@ -81,17 +88,56 @@ def should_trigger_deploy(payload: dict) -> bool:
     return matching_registry_entry(payload) is not None
 
 
+def entry_site_name(entry: dict) -> str:
+    return str(entry.get("name") or "").strip() or "unknown"
+
+
+def record_pre_deploy_failure(entry: dict, failure_message: str) -> None:
+    site_name = entry_site_name(entry)
+    if site_name == "unknown":
+        return
+    checkout_path = str(entry.get("checkout_path") or "")
+    timestamp = utc_timestamp()
+    ctx = DeployContext()
+    ctx.init_runtime_dirs()
+    write_state(
+        ctx,
+        site_name,
+        last_deploy_timestamp=timestamp,
+        last_deploy_status="failed",
+        checkout_path=checkout_path,
+        last_attempted_release=checkout_path,
+        last_failure_reason=failure_message,
+        last_failure_at=timestamp,
+    )
+
+
 def refresh_registry_entry(entry: dict) -> dict:
     repo_url = str(entry.get("repo_url") or "").strip()
     checkout_path = Path(str(entry.get("checkout_path") or "")).resolve()
     branch = str(entry.get("branch") or "").strip() or "main"
+    site_name = entry_site_name(entry)
     if not repo_url:
         raise RuntimeError(f"Registry entry '{entry.get('name')}' is missing repo_url.")
     if not str(entry.get("checkout_path") or "").strip():
         raise RuntimeError(f"Registry entry '{entry.get('name')}' is missing checkout_path.")
 
-    resolved_branch = clone_or_update_checkout(repo_url, checkout_path, branch)
-    return build_registry_entry(REGISTRY_PATH, repo_url, resolved_branch, checkout_path)
+    log_event("checkout refresh", "running", f"{site_name}: {repo_url} -> {checkout_path}")
+    try:
+        resolved_branch = clone_or_update_checkout(repo_url, checkout_path, branch)
+    except Exception as exc:
+        log_event("checkout refresh", "failed", f"{site_name}: {exc}", level="error")
+        raise
+    log_event("checkout refresh", "success", f"{site_name}: branch {resolved_branch}")
+
+    log_event("registry refresh", "running", f"{site_name}: {REGISTRY_PATH}")
+    try:
+        refreshed_entry = build_registry_entry(REGISTRY_PATH, repo_url, resolved_branch, checkout_path)
+    except Exception as exc:
+        log_event("registry refresh", "failed", f"{site_name}: {exc}", level="error")
+        raise
+    log_event("registry refresh", "success", f"{site_name}: {REGISTRY_PATH}")
+    return refreshed_entry
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -147,8 +193,11 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"missing tls email")
             return
 
+        deploy_started = False
         try:
             entry = refresh_registry_entry(entry)
+            deploy_started = True
+            log_event("deploy", "running", f"{entry_site_name(entry)}: webhook-triggered deploy")
             result = deploy_registry_entry(
                 entry,
                 tls_email=DEFAULT_TLS_EMAIL,
@@ -156,6 +205,8 @@ class Handler(BaseHTTPRequestHandler):
                 webhook_secret=WEBHOOK_SECRET,
             )
         except Exception as exc:  # noqa: BLE001
+            if not deploy_started:
+                record_pre_deploy_failure(entry, str(exc))
             log_event("webhook", "failed", str(exc), level="error")
             self.send_response(500)
             self.end_headers()
