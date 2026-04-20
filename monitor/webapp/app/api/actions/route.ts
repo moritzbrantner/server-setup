@@ -40,6 +40,7 @@ function parseActionRequest(body: unknown): DashboardActionRequest {
       return { action: record.action };
     case "restart-site-service":
     case "retry-deploy":
+    case "repair-site":
       if (typeof record.siteName !== "string" || !record.siteName.trim()) {
         throw new Error("This action requires a non-empty siteName.");
       }

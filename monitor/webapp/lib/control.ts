@@ -22,6 +22,7 @@ export type DashboardActionRequest =
   | { action: "restart-status-webapp" }
   | { action: "restart-site-service"; siteName: string }
   | { action: "retry-deploy"; siteName: string }
+  | { action: "repair-site"; siteName: string }
   | {
       action: "add-site";
       repoUrl: string;
@@ -887,6 +888,32 @@ export async function runDashboardAction(
         ],
         `Deploy retry finished for ${siteName}.`,
         siteName
+      );
+      break;
+    }
+    case "repair-site": {
+      const siteName = readSiteName(request.siteName);
+      const registryPath = await resolveDeployRegistryPath();
+
+      result = await runTypedCommand(
+        "repair-site",
+        "python3",
+        [
+          resolveRepoPath("scripts/repair_site.py"),
+          "--site",
+          siteName,
+          "--config",
+          registryPath,
+        ],
+        `Repair finished for ${siteName}.`,
+        siteName,
+        {
+          timeout: 30 * 60 * 1000,
+          env: {
+            ...process.env,
+            REGISTRY_PATH: registryPath,
+          },
+        }
       );
       break;
     }

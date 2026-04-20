@@ -158,6 +158,7 @@ test("runDashboardAction retries deploys from registry metadata", async () => {
     "utf-8"
   );
   await writeFile(path.join(scriptsDir, "deploy_repo.py"), "print('stub deploy')\n", "utf-8");
+  await writeFile(path.join(scriptsDir, "repair_site.py"), "print('stub repair')\n", "utf-8");
   await writeFile(automationEnvPath, "WEBHOOK_SECRET=test\n", "utf-8");
   await writeFile(sshConfigPath, "PasswordAuthentication no\nPermitRootLogin no\n", "utf-8");
 
@@ -225,6 +226,102 @@ exit 0
 
   const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
   assert.match(loggedCommand, /scripts\/deploy_repo\.py --repo-url https:\/\/github\.com\/example\/app\.git --dest \/srv\/apps\/app --branch main --skip-github-hook/);
+});
+
+test("runDashboardAction repairs a site through the repair script", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const rootDir = path.join(tmpDir, "root");
+  const scriptsDir = path.join(rootDir, "scripts");
+  const binDir = path.join(tmpDir, "bin");
+  const logsDir = path.join(tmpDir, "logs");
+  const configPath = path.join(rootDir, "deploy", "registry.json");
+  const automationEnvPath = path.join(tmpDir, "site-automation");
+  const sshConfigPath = path.join(tmpDir, "sshd.conf");
+
+  await mkdir(scriptsDir, { recursive: true });
+  await mkdir(binDir);
+  await mkdir(logsDir);
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(
+    configPath,
+    JSON.stringify([
+      {
+        name: "app",
+        repo_url: "https://github.com/example/app.git",
+        branch: "main",
+        checkout_path: "/srv/apps/app",
+        deploy_config: {
+          name: "app",
+          domain: "app.example.com",
+          runtime: {
+            mode: "static",
+          },
+        },
+      },
+    ]),
+    "utf-8"
+  );
+  await writeFile(path.join(scriptsDir, "repair_site.py"), "print('stub repair')\n", "utf-8");
+  await writeFile(automationEnvPath, "WEBHOOK_SECRET=test\n", "utf-8");
+  await writeFile(sshConfigPath, "PasswordAuthentication no\nPermitRootLogin no\n", "utf-8");
+
+  await writeExecutable(
+    path.join(binDir, "systemctl"),
+    `#!/usr/bin/env bash
+case "$1" in
+  is-active)
+    printf 'active\\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+  );
+  await writeExecutable(
+    path.join(binDir, "python3"),
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${logsDir}/python3.log"
+exit 0
+`
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response("ok", {
+      status: 200,
+      headers: {
+        "content-type": "text/plain",
+      },
+    });
+
+  try {
+    await withEnv(
+      {
+        SERVER_SETUP_ROOT: rootDir,
+        STATUS_CONFIG_PATH: configPath,
+        PATH: `${binDir}:${process.env.PATH || ""}`,
+        STATUS_AUTOMATION_ENV_FILE: automationEnvPath,
+        STATUS_SSH_HARDENING_CONFIG: sshConfigPath,
+        STATUS_LETSENCRYPT_LIVE_DIR: path.join(tmpDir, "letsencrypt"),
+      },
+      async () => {
+        const response = await runDashboardAction({
+          action: "repair-site",
+          siteName: "app",
+        });
+
+        assert.equal(response.result.action, "repair-site");
+        assert.equal(response.result.target, "app");
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
+  assert.match(loggedCommand, /scripts\/repair_site\.py --site app --config .*deploy\/registry\.json/);
 });
 
 test("runDashboardAction can start and restart nginx", async () => {

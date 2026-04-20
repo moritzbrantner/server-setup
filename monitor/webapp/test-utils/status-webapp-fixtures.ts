@@ -155,6 +155,7 @@ export async function createStatusWebappFixture(): Promise<StatusWebappFixture> 
   );
   await writeFile(sshConfigPath, "PasswordAuthentication no\nPermitRootLogin no\n", "utf-8");
   await writeFile(path.join(scriptsDir, "deploy_repo.py"), "print('stub deploy')\n", "utf-8");
+  await writeFile(path.join(scriptsDir, "repair_site.py"), "print('stub repair')\n", "utf-8");
   await writeFile(path.join(scriptsDir, "manage_github_secrets.py"), "print('stub secrets')\n", "utf-8");
   await writeFile(path.join(scriptsDir, "manage_dns_records.py"), "print('stub dns')\n", "utf-8");
 
@@ -238,6 +239,9 @@ case "$(basename "$script")" in
 JSON
     fi
     printf 'deploy ok\\n'
+    ;;
+  repair_site.py)
+    printf 'repair ok\\n'
     ;;
   manage_github_secrets.py)
     command="$1"

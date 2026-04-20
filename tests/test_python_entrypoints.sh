@@ -20,6 +20,10 @@ test_deploy_repo_python_entrypoint_shows_help() {
   python3 "$ROOT_DIR/scripts/deploy_repo.py" --help >/dev/null
 }
 
+test_repair_site_python_entrypoint_shows_help() {
+  python3 "$ROOT_DIR/scripts/repair_site.py" --help >/dev/null
+}
+
 test_shutdown_server_python_entrypoint_shows_help() {
   python3 "$ROOT_DIR/scripts/shutdown_server.py" --help >/dev/null
 }
@@ -56,6 +60,7 @@ run_test "shutdown_websites.py help works" test_shutdown_websites_python_entrypo
 run_test "reset_server_setup.py help works" test_reset_server_setup_python_entrypoint_shows_help
 run_test "prepare_server.py help works" test_prepare_server_python_entrypoint_shows_help
 run_test "deploy_repo.py help works" test_deploy_repo_python_entrypoint_shows_help
+run_test "repair_site.py help works" test_repair_site_python_entrypoint_shows_help
 run_test "shutdown_server.py help works" test_shutdown_server_python_entrypoint_shows_help
 run_test "manage_services.py help works" test_manage_services_python_entrypoint_shows_help
 run_test "migrate_registry.py help works" test_migrate_registry_python_entrypoint_shows_help

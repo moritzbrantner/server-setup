@@ -183,6 +183,8 @@ function actionLabel(action: DashboardActionRequest["action"]): string {
       return "Restart service";
     case "retry-deploy":
       return "Retry deploy";
+    case "repair-site":
+      return "Repair site";
     case "add-site":
       return "Add website";
   }
@@ -1918,6 +1920,16 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
                   {busyActionKey === actionKey({ action: "retry-deploy", siteName: application.name })
                     ? "Retrying..."
                     : "Retry deploy"}
+                </button>
+                <button
+                  className="ghost-button"
+                  disabled={!adminUnlocked || !application.repoUrl || busyActionKey !== null}
+                  onClick={() => void runAction({ action: "repair-site", siteName: application.name })}
+                  type="button"
+                >
+                  {busyActionKey === actionKey({ action: "repair-site", siteName: application.name })
+                    ? "Repairing..."
+                    : "Repair site"}
                 </button>
               </div>
 

@@ -71,6 +71,32 @@ What it does:
 
 If automatic GitHub webhook creation is not possible, the script prints the exact payload URL and secret to configure manually.
 
+## Repair a website
+
+Use `repair_site.py` when a managed checkout is incomplete, a repo-owned `server.conf` has changed, or a previous deploy left the site in a failed state:
+
+```bash
+sudo python3 ./scripts/repair_site.py --site your-app
+```
+
+Preview the exact actions first:
+
+```bash
+python3 ./scripts/repair_site.py --site your-app --dry-run
+```
+
+Repair is designed to be idempotent and conservative:
+- it selects one site from `deploy/registry.json`
+- it aborts before deploy reset if the checkout has tracked local modifications
+- it clones or updates the configured checkout and branch
+- it creates a missing root `server.conf` only when the registry already has enough `deploy_config` metadata
+- it never overwrites an existing `server.conf`
+- it refreshes the registry from the repo-owned `server.conf`
+- it blocks if required repo config files such as `.env` are still missing
+- it redeploys through the same deploy engine used by `deploy_repo.py`
+
+The authenticated status webapp exposes the same operation as **Repair site** on each managed application.
+
 ## Deployment State
 
 `deploy-repo` and the webhook receiver write deploy state into `/var/lib/server-setup/state/<site>.json`.

@@ -224,6 +224,15 @@ test("status webapp API routes cover config, actions, site settings, secrets, DN
       assert.equal(retryDeployResponse.status, 200);
       assert.equal((await readJson<TestActionResponse>(retryDeployResponse)).result.action, "retry-deploy");
 
+      const repairSiteResponse = await actionsRoute.POST(
+        adminRequest("http://example.test/api/actions", {
+          method: "POST",
+          body: JSON.stringify({ action: "repair-site", siteName: "app" }),
+        })
+      );
+      assert.equal(repairSiteResponse.status, 200);
+      assert.equal((await readJson<TestActionResponse>(repairSiteResponse)).result.action, "repair-site");
+
       const addSiteResponse = await actionsRoute.POST(
         adminRequest("http://example.test/api/actions", {
           method: "POST",
@@ -324,6 +333,7 @@ test("status webapp API routes cover config, actions, site settings, secrets, DN
 
   const pythonLog = await readLog(fixture.logsDir, "python3.log");
   assert.match(pythonLog, /deploy_repo\.py --repo-url https:\/\/github\.com\/example\/edited-app\.git/);
+  assert.match(pythonLog, /repair_site\.py --site app --config .*deploy\/registry\.json/);
   assert.match(pythonLog, /deploy_repo\.py --repo-url https:\/\/github\.com\/example\/new-app\.git/);
   assert.match(pythonLog, /manage_github_secrets\.py set API_KEY --site app --json/);
   assert.match(pythonLog, /manage_github_secrets\.py delete API_KEY --site app --json/);
