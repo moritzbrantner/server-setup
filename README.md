@@ -33,6 +33,8 @@ What it does:
 `prepare_server.py` leaves SSH untouched by default. If you explicitly want it to manage `sshd`, add `--with-ssh-hardening`.
 
 The Next.js status webapp is the supported dashboard for this repository.
+By default, `prepare_server.py --with-status-webapp` installs a systemd service on port `4000` and an nginx proxy at `http://monitor.localhost/` when that name resolves to the server.
+For a different dashboard host, run `scripts/setup_status_webapp.py --server-name status.example.com`; use `--skip-nginx` only when another reverse proxy owns the route.
 
 If you want to use its admin controls:
 1. Set `STATUS_WEBAPP_ADMIN_TOKEN` in `/etc/default/server-setup-status-webapp`.
@@ -172,6 +174,7 @@ Optional DNS provider configuration enables domain management in the authenticat
 ```
 
 Supported `dns.provider` values are `porkbun` and `namecheap`. Credentials stay out of `server.conf`; set them in the status webapp environment file (`/etc/default/server-setup-status-webapp`) and restart `server-setup-status-webapp.service`.
+Namecheap writes replace the full host list for the zone, so preview changes with `scripts/manage_dns_records.py ... --dry-run` before mutating production records.
 
 Porkbun:
 
@@ -189,6 +192,21 @@ NAMECHEAP_USERNAME=...       # optional, defaults to NAMECHEAP_API_USER
 NAMECHEAP_CLIENT_IP=...      # required by Namecheap API access
 NAMECHEAP_SANDBOX=false      # optional
 ```
+
+## Operational environment
+
+The deploy registry is `deploy/registry.json`. It is host-local runtime state and should stay uncommitted; the committed `deploy/registry.example.json` is only an example.
+
+Status webapp knobs in `/etc/default/server-setup-status-webapp`:
+- `STATUS_CONFIG_PATH`: overrides the dashboard config source. Set it to the active `deploy/registry.json` for admin deploy actions.
+- `STATUS_STATE_DIR`: overrides the deploy-state directory read by the dashboard.
+- `STATUS_WEBAPP_GITHUB_TOKEN`: token used by status webapp-launched GitHub commands.
+- DNS variables: `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`, `NAMECHEAP_API_USER`, `NAMECHEAP_API_KEY`, `NAMECHEAP_USERNAME`, `NAMECHEAP_CLIENT_IP`, and `NAMECHEAP_SANDBOX`.
+
+Automation knobs in `/etc/default/site-automation`:
+- `REGISTRY_PATH`: deploy registry used by webhook redeploys.
+- `STATE_DIR`: deploy-state directory written by automation.
+- `SITE_AUTOMATION_GITHUB_TOKEN`: token used by automation-launched GitHub commands.
 
 ## Operate the stack
 

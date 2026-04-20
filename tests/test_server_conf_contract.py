@@ -69,6 +69,12 @@ class ServerConfContractTests(unittest.TestCase):
         self.assertEqual(normalized["service"]["name"], "simple-site.service")
         self.assertEqual(normalized["nginx"]["tls_hostnames"], ["simple.localhost"])
 
+    def test_repository_root_server_conf_does_not_serve_repo_root(self) -> None:
+        normalized = self.module.normalize_server_conf(ROOT_DIR)
+
+        self.assertNotEqual(normalized["build_output"], ".")
+        self.assertEqual(normalized["build_output"], "monitor/static-placeholder")
+
     def test_normalize_accepts_nested_service_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             conf_path = pathlib.Path(tmp) / "server.conf"

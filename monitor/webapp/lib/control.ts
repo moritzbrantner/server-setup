@@ -405,7 +405,11 @@ async function runGithubJsonScript(
   args: string[],
   options: CommandOptions & { input?: string } = {}
 ): Promise<JsonRecord> {
-  return runPythonJsonScript("manage_github_secrets.py", args, options);
+  const registryPath = await resolveDeployRegistryPath();
+  return runPythonJsonScript("manage_github_secrets.py", [...args, "--config", registryPath], {
+    ...options,
+    env: deployRegistryCommandEnv(registryPath, options.env),
+  });
 }
 
 async function runDnsJsonScript(args: string[]): Promise<JsonRecord> {
@@ -475,6 +479,16 @@ async function resolveDeployRegistryPath(): Promise<string> {
   }
 
   return resolveRepoPath("deploy/registry.json");
+}
+
+function deployRegistryCommandEnv(
+  registryPath: string,
+  baseEnv: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    REGISTRY_PATH: registryPath,
+  };
 }
 
 export async function readEditableConfig(): Promise<EditableConfigDocument> {
@@ -863,6 +877,7 @@ export async function runDashboardAction(
     }
     case "retry-deploy": {
       const siteName = readSiteName(request.siteName);
+      const registryPath = await resolveDeployRegistryPath();
       const entry = await findRegistryEntry(siteName);
       const branch = typeof entry.branch === "string" && entry.branch.trim() ? entry.branch.trim() : "main";
       const checkoutPath =
@@ -887,7 +902,11 @@ export async function runDashboardAction(
           "--skip-github-hook",
         ],
         `Deploy retry finished for ${siteName}.`,
-        siteName
+        siteName,
+        {
+          timeout: 30 * 60 * 1000,
+          env: deployRegistryCommandEnv(registryPath),
+        }
       );
       break;
     }
@@ -909,10 +928,7 @@ export async function runDashboardAction(
         siteName,
         {
           timeout: 30 * 60 * 1000,
-          env: {
-            ...process.env,
-            REGISTRY_PATH: registryPath,
-          },
+          env: deployRegistryCommandEnv(registryPath),
         }
       );
       break;
@@ -946,10 +962,7 @@ export async function runDashboardAction(
         repoUrl,
         {
           timeout: 30 * 60 * 1000,
-          env: {
-            ...process.env,
-            REGISTRY_PATH: registryPath,
-          },
+          env: deployRegistryCommandEnv(registryPath),
         }
       );
       break;

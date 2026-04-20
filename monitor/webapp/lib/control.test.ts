@@ -187,6 +187,7 @@ esac
     path.join(binDir, "python3"),
     `#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"${logsDir}/python3.log"
+printf 'REGISTRY_PATH=%s\\n' "$REGISTRY_PATH" >>"${logsDir}/python3-env.log"
 exit 0
 `
   );
@@ -226,6 +227,8 @@ exit 0
 
   const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
   assert.match(loggedCommand, /scripts\/deploy_repo\.py --repo-url https:\/\/github\.com\/example\/app\.git --dest \/srv\/apps\/app --branch main --skip-github-hook/);
+  const loggedEnv = await readFile(path.join(logsDir, "python3-env.log"), "utf-8");
+  assert.match(loggedEnv, new RegExp(`^REGISTRY_PATH=${configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
 });
 
 test("runDashboardAction repairs a site through the repair script", async () => {
@@ -579,10 +582,12 @@ test("listGithubSecrets reads secrets for a managed site", async () => {
   const rootDir = path.join(tmpDir, "root");
   const scriptsDir = path.join(rootDir, "scripts");
   const binDir = path.join(tmpDir, "bin");
+  const logsDir = path.join(tmpDir, "logs");
   const configPath = path.join(rootDir, "deploy", "registry.json");
 
   await mkdir(scriptsDir, { recursive: true });
   await mkdir(binDir);
+  await mkdir(logsDir);
   await mkdir(path.dirname(configPath), { recursive: true });
   await writeFile(
     configPath,
@@ -600,6 +605,7 @@ test("listGithubSecrets reads secrets for a managed site", async () => {
   await writeExecutable(
     path.join(binDir, "python3"),
     `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${logsDir}/python3.log"
 if [[ "$2" == "list" ]]; then
   cat <<'JSON'
 {"action":"list","repo":"example/app","siteName":"app","checkoutPath":"/srv/apps/app","envFilePath":"/srv/apps/app/.env","workflowFiles":[".github/workflows/deploy.yml"],"secrets":[{"name":"API_KEY","configured":true,"presentInEnvFile":true,"requiredByWorkflows":[".github/workflows/deploy.yml"]}]}
@@ -625,6 +631,9 @@ exit 1
       assert.equal(document.secrets[0]?.configured, true);
     }
   );
+
+  const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
+  assert.match(loggedCommand, new RegExp(`manage_github_secrets\\.py list --site app --json --config ${configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
 test("setGithubSecret and deleteGithubSecret refresh the secret list", async () => {
@@ -696,9 +705,10 @@ exit 1
   );
 
   const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
-  assert.match(loggedCommand, /manage_github_secrets\.py set API_KEY --site app --json/);
-  assert.match(loggedCommand, /manage_github_secrets\.py delete API_KEY --site app --json/);
-  assert.match(loggedCommand, /manage_github_secrets\.py list --site app --json/);
+  const escapedConfigPath = configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(loggedCommand, new RegExp(`manage_github_secrets\\.py set API_KEY --site app --json --config ${escapedConfigPath}`));
+  assert.match(loggedCommand, new RegExp(`manage_github_secrets\\.py delete API_KEY --site app --json --config ${escapedConfigPath}`));
+  assert.match(loggedCommand, new RegExp(`manage_github_secrets\\.py list --site app --json --config ${escapedConfigPath}`));
 });
 
 test("domain DNS helpers call manage_dns_records for a configured site", async () => {

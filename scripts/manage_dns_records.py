@@ -28,6 +28,7 @@ class DomainTarget:
 
 
 JsonRecord = dict[str, Any]
+NAMECHEAP_REPLACE_WARNING = "Namecheap updates replace the full host list for the zone."
 
 
 def json_response(payload: JsonRecord) -> None:
@@ -404,6 +405,64 @@ def provider_client(provider: str) -> PorkbunClient | NamecheapClient:
     raise DnsError(f"Unsupported DNS provider: {provider}")
 
 
+def find_record(records: list[JsonRecord], record_id: str) -> JsonRecord:
+    for record in records:
+        if str(record.get("id") or "") == record_id:
+            return record
+    raise DnsError(f"DNS record '{record_id}' was not found.")
+
+
+def proposed_record_change(action: str, before: list[JsonRecord], record: JsonRecord | None = None, record_id: str = "") -> tuple[list[JsonRecord], JsonRecord]:
+    if action == "create":
+        if record is None:
+            raise DnsError("Record payload is required for create.")
+        after = [*before, record]
+        return after, {"created": [record], "updated": [], "deleted": []}
+
+    if action == "update":
+        if record is None:
+            raise DnsError("Record payload is required for update.")
+        existing = find_record(before, str(record["id"]))
+        updated = {**existing, **record}
+        after = [updated if str(item.get("id") or "") == str(record["id"]) else item for item in before]
+        return after, {"created": [], "updated": [{"before": existing, "after": updated}], "deleted": []}
+
+    if action == "delete":
+        existing = find_record(before, record_id)
+        after = [item for item in before if str(item.get("id") or "") != record_id]
+        return after, {"created": [], "updated": [], "deleted": [existing]}
+
+    raise DnsError("Unsupported DNS action.")
+
+
+def mutation_payload(
+    action: str,
+    target: DomainTarget,
+    records: list[JsonRecord],
+    *,
+    message: str,
+    dry_run: bool,
+    before: list[JsonRecord] | None = None,
+    after: list[JsonRecord] | None = None,
+    diff: JsonRecord | None = None,
+    warning: str = "",
+) -> JsonRecord:
+    payload: JsonRecord = {
+        "action": action,
+        "message": message,
+        "dryRun": dry_run,
+        **summarize_document(target, records),
+    }
+    if before is not None and after is not None:
+        payload["before"] = before
+        payload["after"] = after
+    if diff:
+        payload.update(diff)
+    if warning:
+        payload["warning"] = warning
+    return payload
+
+
 def add_record_args(parser: argparse.ArgumentParser, *, include_id: bool = False) -> None:
     if include_id:
         parser.add_argument("--id", required=True, help="Provider record ID to update.")
@@ -425,15 +484,18 @@ def parse_args() -> argparse.Namespace:
 
     create_parser = subparsers.add_parser("create", help="Create a DNS record.")
     create_parser.add_argument("--site", required=True)
+    create_parser.add_argument("--dry-run", action="store_true", help="Preview the DNS change without writing it.")
     add_record_args(create_parser)
 
     update_parser = subparsers.add_parser("update", help="Update a DNS record by provider ID.")
     update_parser.add_argument("--site", required=True)
+    update_parser.add_argument("--dry-run", action="store_true", help="Preview the DNS change without writing it.")
     add_record_args(update_parser, include_id=True)
 
     delete_parser = subparsers.add_parser("delete", help="Delete a DNS record by provider ID.")
     delete_parser.add_argument("--site", required=True)
     delete_parser.add_argument("--id", required=True)
+    delete_parser.add_argument("--dry-run", action="store_true", help="Preview the DNS change without writing it.")
     return parser.parse_args()
 
 
@@ -447,29 +509,65 @@ def run(args: argparse.Namespace) -> JsonRecord:
 
     if args.action == "create":
         record = build_record("", args.type, args.name, args.content, args.ttl, args.prio)
+        message = f"Created {record['type']} record {record['name']} in {target.zone}."
+        if args.dry_run or target.provider == "namecheap":
+            before = client.list_records(target)
+            after, diff = proposed_record_change("create", before, record)
+            records = after if args.dry_run else client.set_records(target, after)
+            return mutation_payload(
+                "create",
+                target,
+                records,
+                message=f"Would create {record['type']} record {record['name']} in {target.zone}." if args.dry_run else message,
+                dry_run=args.dry_run,
+                before=before,
+                after=records,
+                diff=diff,
+                warning=NAMECHEAP_REPLACE_WARNING if target.provider == "namecheap" else "",
+            )
         records = client.create_record(target, record)
-        return {
-            "action": "create",
-            "message": f"Created {record['type']} record {record['name']} in {target.zone}.",
-            **summarize_document(target, records),
-        }
+        return mutation_payload("create", target, records, message=message, dry_run=False)
 
     if args.action == "update":
         record = build_record(args.id, args.type, args.name, args.content, args.ttl, args.prio)
+        message = f"Updated {record['type']} record {record['name']} in {target.zone}."
+        if args.dry_run or target.provider == "namecheap":
+            before = client.list_records(target)
+            after, diff = proposed_record_change("update", before, record)
+            records = after if args.dry_run else client.set_records(target, after)
+            return mutation_payload(
+                "update",
+                target,
+                records,
+                message=f"Would update {record['type']} record {record['name']} in {target.zone}." if args.dry_run else message,
+                dry_run=args.dry_run,
+                before=before,
+                after=records,
+                diff=diff,
+                warning=NAMECHEAP_REPLACE_WARNING if target.provider == "namecheap" else "",
+            )
         records = client.update_record(target, record)
-        return {
-            "action": "update",
-            "message": f"Updated {record['type']} record {record['name']} in {target.zone}.",
-            **summarize_document(target, records),
-        }
+        return mutation_payload("update", target, records, message=message, dry_run=False)
 
     if args.action == "delete":
+        message = f"Deleted DNS record {args.id} from {target.zone}."
+        if args.dry_run or target.provider == "namecheap":
+            before = client.list_records(target)
+            after, diff = proposed_record_change("delete", before, record_id=args.id)
+            records = after if args.dry_run else client.set_records(target, after)
+            return mutation_payload(
+                "delete",
+                target,
+                records,
+                message=f"Would delete DNS record {args.id} from {target.zone}." if args.dry_run else message,
+                dry_run=args.dry_run,
+                before=before,
+                after=records,
+                diff=diff,
+                warning=NAMECHEAP_REPLACE_WARNING if target.provider == "namecheap" else "",
+            )
         records = client.delete_record(target, args.id)
-        return {
-            "action": "delete",
-            "message": f"Deleted DNS record {args.id} from {target.zone}.",
-            **summarize_document(target, records),
-        }
+        return mutation_payload("delete", target, records, message=message, dry_run=False)
 
     raise DnsError("Unsupported DNS action.")
 
@@ -481,6 +579,8 @@ def main() -> None:
         if args.json:
             json_response(payload)
         else:
+            if payload.get("warning"):
+                print(payload["warning"])
             print(payload.get("message") or f"{len(payload.get('records', []))} DNS records.")
     except DnsError as exc:
         raise SystemExit(str(exc)) from exc

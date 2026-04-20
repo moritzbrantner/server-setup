@@ -25,6 +25,7 @@ make test
 
 That suite includes:
 - shell linting with ShellCheck
+- Python linting with Ruff when it is installed
 - status webapp TypeScript typechecking
 - shell tests for the deployment helpers and systemd assets
 - Python unit tests for the deployment engine and contracts
@@ -114,6 +115,7 @@ make docker-sandbox-test
 ```
 
 This check is intentionally outside `./tests/run-tests.sh` because it needs privileged Docker and systemd-in-container support.
+It is the recommended pre-release integration path and exercises static deployment, service deployment, nginx routing, and the status webapp nginx proxy when practical in the sandbox.
 
 ## Release checklist
 
@@ -138,6 +140,7 @@ The example repositories under `examples/repositories/` use the current nested `
 
 - The supported dashboard is `monitor/webapp`; the legacy Python dashboard has been retired.
 - `deploy/registry.json` is generated host-local runtime state and should not be committed.
+- `STATUS_CONFIG_PATH` should point at the active `deploy/registry.json` when testing dashboard admin actions against a non-default registry path.
 - `scripts/migrate_registry.py` exists only to migrate older `deploy/sites.json` installations.
 
 ## CI

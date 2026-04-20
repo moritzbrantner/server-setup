@@ -13,6 +13,8 @@ from pathlib import Path
 from simple_setup_common import load_env_file, update_env_file
 
 DEFAULT_BUN_INSTALL = "/root/.bun"
+STATUS_NGINX_AVAILABLE = Path("/etc/nginx/sites-available/server-setup-status-webapp.conf")
+STATUS_NGINX_ENABLED = Path("/etc/nginx/sites-enabled/server-setup-status-webapp.conf")
 
 
 def log(message: str) -> None:
@@ -103,6 +105,9 @@ def render_status_webapp_env(root_dir: str, host: str, port: str, admin_token: s
         f"STATUS_WEBAPP_HOST={host}\n"
         f"STATUS_WEBAPP_PORT={port}\n"
         f"STATUS_WEBAPP_ADMIN_TOKEN={admin_token}\n"
+        f"STATUS_CONFIG_PATH={root_dir}/deploy/registry.json\n"
+        "STATUS_STATE_DIR=/var/lib/server-setup/state\n"
+        "STATUS_WEBAPP_GITHUB_TOKEN=\n"
         "PORKBUN_API_KEY=\n"
         "PORKBUN_SECRET_API_KEY=\n"
         "NAMECHEAP_API_USER=\n"
@@ -135,6 +140,37 @@ def render_status_webapp_service(root_dir: str, env_file: str) -> str:
     )
 
 
+def render_status_webapp_nginx(server_name: str = "monitor.localhost", port: str = "4000") -> str:
+    server_name = server_name.strip()
+    if not server_name or "\n" in server_name:
+        raise SystemExit("--server-name must be a non-empty single-line value.")
+    port = str(port).strip()
+    if not port.isdigit():
+        raise SystemExit("Status webapp port must be numeric.")
+    return (
+        "server {\n"
+        "    listen 80;\n"
+        "    listen [::]:80;\n"
+        "\n"
+        f"    server_name {server_name};\n"
+        "\n"
+        "    access_log /var/log/nginx/server-setup-status-webapp.access.log;\n"
+        "    error_log /var/log/nginx/server-setup-status-webapp.error.log;\n"
+        "\n"
+        "    location / {\n"
+        f"        proxy_pass http://127.0.0.1:{port};\n"
+        "        proxy_http_version 1.1;\n"
+        "        proxy_set_header Host $host;\n"
+        "        proxy_set_header X-Real-IP $remote_addr;\n"
+        "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+        "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+        "        proxy_set_header Upgrade $http_upgrade;\n"
+        "        proxy_set_header Connection \"upgrade\";\n"
+        "    }\n"
+        "}\n"
+    )
+
+
 def build_status_webapp(webapp_dir: Path) -> None:
     if not webapp_dir.is_dir():
         raise SystemExit(f"Monitoring webapp directory not found at {webapp_dir}")
@@ -152,6 +188,23 @@ def enable_service(name: str) -> None:
     if subprocess.run(["systemctl", "is-active", "--quiet", name], check=False).returncode != 0:
         subprocess.run(["systemctl", "status", name, "--no-pager"], check=False)
         raise SystemExit(f"Service '{name}' failed to start.")
+
+
+def install_status_webapp_nginx(
+    server_name: str,
+    port: str,
+    *,
+    available_path: Path = STATUS_NGINX_AVAILABLE,
+    enabled_path: Path = STATUS_NGINX_ENABLED,
+) -> None:
+    available_path.parent.mkdir(parents=True, exist_ok=True)
+    enabled_path.parent.mkdir(parents=True, exist_ok=True)
+    available_path.write_text(render_status_webapp_nginx(server_name, port), encoding="utf-8")
+    if enabled_path.exists() or enabled_path.is_symlink():
+        enabled_path.unlink()
+    enabled_path.symlink_to(available_path)
+    subprocess.run(["nginx", "-t"], check=True)
+    subprocess.run(["systemctl", "reload", "nginx"], check=True)
 
 
 def wait_for_status_webapp(port: str) -> None:
@@ -174,6 +227,9 @@ def write_status_webapp_env(env_file: Path, root_dir: str, host: str, port: str)
             "STATUS_WEBAPP_HOST": host,
             "STATUS_WEBAPP_PORT": port,
             "STATUS_WEBAPP_ADMIN_TOKEN": existing.get("STATUS_WEBAPP_ADMIN_TOKEN", ""),
+            "STATUS_CONFIG_PATH": existing.get("STATUS_CONFIG_PATH", f"{root_dir}/deploy/registry.json"),
+            "STATUS_STATE_DIR": existing.get("STATUS_STATE_DIR", "/var/lib/server-setup/state"),
+            "STATUS_WEBAPP_GITHUB_TOKEN": existing.get("STATUS_WEBAPP_GITHUB_TOKEN", ""),
             "PORKBUN_API_KEY": existing.get("PORKBUN_API_KEY", ""),
             "PORKBUN_SECRET_API_KEY": existing.get("PORKBUN_SECRET_API_KEY", ""),
             "NAMECHEAP_API_USER": existing.get("NAMECHEAP_API_USER", ""),
@@ -188,8 +244,11 @@ def write_status_webapp_env(env_file: Path, root_dir: str, host: str, port: str)
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build and install the status webapp service.")
     parser.add_argument("--root", default=str(Path(__file__).resolve().parent.parent))
+    parser.add_argument("--server-name", default="monitor.localhost")
+    parser.add_argument("--skip-nginx", action="store_true")
     parser.add_argument("--render-env", action="store_true")
     parser.add_argument("--render-service", action="store_true")
+    parser.add_argument("--render-nginx", action="store_true")
     return parser.parse_args()
 
 
@@ -209,16 +268,24 @@ def main() -> None:
     if args.render_service:
         print(render_status_webapp_service(root_dir, str(env_file)), end="")
         return
+    if args.render_nginx:
+        print(render_status_webapp_nginx(args.server_name, status_port), end="")
+        return
 
     require_root()
     if not have_cmd("apt-get"):
         raise SystemExit("This script supports Ubuntu/Debian hosts with apt.")
-    install_pkgs(["ca-certificates", "curl", "unzip"])
+    packages = ["ca-certificates", "curl", "unzip"]
+    if not args.skip_nginx:
+        packages.append("nginx")
+    install_pkgs(packages)
     ensure_bun()
     build_status_webapp(webapp_dir)
     write_status_webapp_env(env_file, root_dir, status_host, status_port)
     service_path.write_text(render_status_webapp_service(root_dir, str(env_file)), encoding="utf-8")
     enable_service(service_name)
+    if not args.skip_nginx:
+        install_status_webapp_nginx(args.server_name, status_port)
     wait_for_status_webapp(status_port)
 
 

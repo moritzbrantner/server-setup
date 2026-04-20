@@ -27,7 +27,9 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq shellcheck python3
+          sudo apt-get install -y jq shellcheck python3 pipx
+          pipx install ruff
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run repository test suite
         run: ./tests/run-tests.sh

@@ -17,6 +17,9 @@ test_render_status_webapp_env_uses_port_4000() {
   grep -Fq 'STATUS_WEBAPP_HOST=0.0.0.0' <<<"$env_body"
   grep -Fq 'STATUS_WEBAPP_PORT=4000' <<<"$env_body"
   grep -Fq 'STATUS_WEBAPP_ADMIN_TOKEN=' <<<"$env_body"
+  grep -Fq "STATUS_CONFIG_PATH=$ROOT_DIR/deploy/registry.json" <<<"$env_body"
+  grep -Fq 'STATUS_STATE_DIR=/var/lib/server-setup/state' <<<"$env_body"
+  grep -Fq 'STATUS_WEBAPP_GITHUB_TOKEN=' <<<"$env_body"
   grep -Fq 'PORKBUN_API_KEY=' <<<"$env_body"
   grep -Fq 'NAMECHEAP_CLIENT_IP=' <<<"$env_body"
 }
@@ -35,6 +38,16 @@ test_render_status_webapp_service_restarts_on_failure() {
 
 run_test "setup-status-webapp renders environment with port 4000" test_render_status_webapp_env_uses_port_4000
 run_test "setup-status-webapp renders restartable systemd service" test_render_status_webapp_service_restarts_on_failure
+
+test_render_status_webapp_nginx_uses_custom_server_name() {
+  local nginx
+  nginx="$(python3 "$ROOT_DIR/scripts/setup_status_webapp.py" --root "$ROOT_DIR" --server-name status.example.com --render-nginx)"
+
+  grep -Fq 'server_name status.example.com;' <<<"$nginx"
+  grep -Fq 'proxy_pass http://127.0.0.1:4000;' <<<"$nginx"
+}
+
+run_test "setup-status-webapp renders nginx proxy" test_render_status_webapp_nginx_uses_custom_server_name
 
 test_status_webapp_runner_uses_bun() {
   grep -Fq 'bun", "install' "$ROOT_DIR/scripts/start_status_webapp.py"
