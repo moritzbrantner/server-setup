@@ -19,10 +19,7 @@ test_status_webapp_frontend_suite() {
   (
     cd "$ROOT_DIR/monitor/webapp"
     npm ci --no-audit --no-fund
-    "$node_bin" ./node_modules/tsx/dist/cli.mjs --test \
-      lib/status.test.ts \
-      lib/control.test.ts \
-      components/dashboard.test.tsx
+    npm test
   )
 }
 

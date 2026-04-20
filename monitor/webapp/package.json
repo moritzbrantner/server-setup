@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "\"$(dirname \"$(command -v npm)\")/node\" ./node_modules/tsx/dist/cli.mjs --test lib/status.test.ts lib/control.test.ts components/dashboard.test.tsx"
+    "test": "\"$(dirname \"$(command -v npm)\")/node\" ./node_modules/tsx/dist/cli.mjs --test lib/status.test.ts lib/control.test.ts components/dashboard.test.tsx app/api/routes.test.ts app/e2e.test.ts"
   },
   "dependencies": {
     "next": "16.1.6",
