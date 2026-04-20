@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import sys
 import tempfile
@@ -73,3 +74,26 @@ class RegistryContractTests(unittest.TestCase):
 
         self.assertIsNotNone(entry)
         self.assertEqual(entry["name"], "app")
+
+    def test_committed_registry_example_documents_generated_shape(self) -> None:
+        payload = json.loads((ROOT_DIR / "deploy" / "registry.example.json").read_text(encoding="utf-8"))
+
+        self.assertIsInstance(payload, list)
+        self.assertGreaterEqual(len(payload), 1)
+        entry = payload[0]
+        for key in (
+            "name",
+            "repo_url",
+            "branch",
+            "checkout_path",
+            "server_conf_path",
+            "service_name",
+            "domain",
+            "webhook_repo",
+            "managed_by",
+            "deploy_config",
+        ):
+            self.assertIn(key, entry)
+        self.assertEqual(entry["managed_by"], "deploy-repo")
+        self.assertIsInstance(entry["deploy_config"], dict)
+        self.assertIn("runtime", entry["deploy_config"])

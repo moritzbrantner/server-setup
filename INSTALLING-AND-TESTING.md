@@ -18,6 +18,8 @@ Run the default validation suite:
 ```
 
 That suite includes:
+- shell linting with ShellCheck
+- status webapp TypeScript typechecking
 - shell tests for the deployment helpers and systemd assets
 - Python unit tests for the deployment engine and contracts
 - the `monitor/webapp` TypeScript test suite via `npm ci && npm test`
@@ -32,6 +34,12 @@ Run only the status webapp tests:
 
 ```bash
 ./tests/test_status_webapp_frontend.sh
+```
+
+Run lint and static checks only:
+
+```bash
+./tests/run-lint.sh
 ```
 
 Run the self-check wrapper:
@@ -73,6 +81,17 @@ python3 ./scripts/prepare_server.py --email admin@example.com --skip-docker
 python3 ./scripts/deploy_repo.py --repo-url /srv/apps/simple-site --dest /srv/apps/simple-site --email admin@example.com --skip-github-hook
 python3 ./scripts/manage_services.py
 ```
+
+Optional pre-release integration check:
+
+```bash
+docker build -t server-setup-test .
+TLM_DEUTSCHLAND_GITHUB_TOKEN=github_pat_... \
+  IMAGE_NAME=server-setup-test \
+  ./tests/test_docker_sandbox.sh
+```
+
+This check is intentionally outside `./tests/run-tests.sh` because it needs privileged Docker, systemd-in-container support, network access, and a GitHub token with access to the deployment test repository. If `TLM_DEUTSCHLAND_GITHUB_TOKEN` is not set, the script reports a skip instead of failing.
 
 ## Examples
 

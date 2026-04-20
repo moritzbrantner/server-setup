@@ -10,6 +10,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
@@ -75,6 +76,26 @@ class WebhookReceiverTests(unittest.TestCase):
             finally:
                 os.environ.pop("WEBHOOK_ALLOWED_REPOS", None)
                 os.environ.pop("REGISTRY_PATH", None)
+
+    def test_refresh_registry_entry_updates_checkout_before_deploy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_path = pathlib.Path(tmp) / "registry.json"
+            checkout_path = pathlib.Path(tmp) / "app"
+            entry = {
+                "name": "app",
+                "repo_url": "https://github.com/org/repo.git",
+                "branch": "main",
+                "checkout_path": str(checkout_path),
+            }
+            self.module.REGISTRY_PATH = registry_path
+
+            with patch.object(self.module, "clone_or_update_checkout", return_value="main") as clone:
+                with patch.object(self.module, "build_registry_entry", return_value={**entry, "refreshed": True}) as build:
+                    refreshed = self.module.refresh_registry_entry(entry)
+
+        self.assertTrue(refreshed["refreshed"])
+        clone.assert_called_once_with("https://github.com/org/repo.git", checkout_path.resolve(), "main")
+        build.assert_called_once_with(registry_path, "https://github.com/org/repo.git", "main", checkout_path.resolve())
 
 
 if __name__ == "__main__":

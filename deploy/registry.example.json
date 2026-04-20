@@ -1,1 +1,46 @@
-[]
+[
+  {
+    "name": "example-app",
+    "repo_url": "https://github.com/example/example-app.git",
+    "branch": "main",
+    "checkout_path": "/srv/apps/example-app",
+    "server_conf_path": "/srv/apps/example-app/server.conf",
+    "service_name": "example-app.service",
+    "domain": "app.example.com",
+    "webhook_repo": "example/example-app",
+    "managed_by": "deploy-repo",
+    "deploy_config": {
+      "name": "example-app",
+      "domain": "app.example.com",
+      "build_output": "public",
+      "web_root": null,
+      "deploy_hooks": {
+        "pre_deploy": null,
+        "build": "npm ci && npm run build",
+        "post_deploy": null
+      },
+      "runtime": {
+        "mode": "static",
+        "working_dir": ".",
+        "user": "root",
+        "health_endpoint": "/health",
+        "health_retries": 20,
+        "health_interval_seconds": 2
+      },
+      "service": {
+        "name": "example-app.service"
+      },
+      "nginx": {
+        "www_redirect": false,
+        "tls_hostnames": [
+          "app.example.com"
+        ]
+      },
+      "dns": {
+        "provider": "porkbun",
+        "zone": "example.com"
+      },
+      "source_server_conf": "/srv/apps/example-app/server.conf"
+    }
+  }
+]

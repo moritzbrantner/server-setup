@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from deploy_engine import deploy_registry_entry
+from deploy_engine import build_registry_entry, clone_or_update_checkout, deploy_registry_entry
 from registry_contract import DEFAULT_REGISTRY_PATH, find_registry_entry_by_push
 
 WEBHOOK_HOST = os.environ.get("WEBHOOK_HOST", "0.0.0.0")
@@ -81,6 +81,19 @@ def should_trigger_deploy(payload: dict) -> bool:
     return matching_registry_entry(payload) is not None
 
 
+def refresh_registry_entry(entry: dict) -> dict:
+    repo_url = str(entry.get("repo_url") or "").strip()
+    checkout_path = Path(str(entry.get("checkout_path") or "")).resolve()
+    branch = str(entry.get("branch") or "").strip() or "main"
+    if not repo_url:
+        raise RuntimeError(f"Registry entry '{entry.get('name')}' is missing repo_url.")
+    if not str(entry.get("checkout_path") or "").strip():
+        raise RuntimeError(f"Registry entry '{entry.get('name')}' is missing checkout_path.")
+
+    resolved_branch = clone_or_update_checkout(repo_url, checkout_path, branch)
+    return build_registry_entry(REGISTRY_PATH, repo_url, resolved_branch, checkout_path)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:
         return
@@ -135,6 +148,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
+            entry = refresh_registry_entry(entry)
             result = deploy_registry_entry(
                 entry,
                 tls_email=DEFAULT_TLS_EMAIL,
