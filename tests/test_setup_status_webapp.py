@@ -33,7 +33,9 @@ class SetupStatusWebappTests(unittest.TestCase):
                 "BUN_INSTALL=/old/bun\n"
                 "STATUS_WEBAPP_HOST=127.0.0.1\n"
                 "STATUS_WEBAPP_PORT=9999\n"
-                "STATUS_WEBAPP_ADMIN_TOKEN=keep-me\n",
+                "STATUS_WEBAPP_ADMIN_TOKEN=keep-me\n"
+                "PORKBUN_API_KEY=pk_keep\n"
+                "PORKBUN_SECRET_API_KEY=sk_keep\n",
                 encoding="utf-8",
             )
 
@@ -46,6 +48,8 @@ class SetupStatusWebappTests(unittest.TestCase):
         self.assertIn("STATUS_WEBAPP_HOST=0.0.0.0\n", body)
         self.assertIn("STATUS_WEBAPP_PORT=4000\n", body)
         self.assertIn("STATUS_WEBAPP_ADMIN_TOKEN=keep-me\n", body)
+        self.assertIn("PORKBUN_API_KEY=pk_keep\n", body)
+        self.assertIn("PORKBUN_SECRET_API_KEY=sk_keep\n", body)
 
     def test_write_status_webapp_env_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

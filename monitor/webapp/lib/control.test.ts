@@ -16,11 +16,15 @@ import {
 } from "./auth";
 import {
   deleteGithubSecret,
+  createPorkbunDnsRecord,
+  deletePorkbunDnsRecord,
   listGithubSecrets,
+  listPorkbunDnsRecords,
   readEditableConfig,
   runDashboardAction,
   saveEditableConfig,
   setGithubSecret,
+  updatePorkbunDnsRecord,
   updateSiteDeploymentSettings,
 } from "./control";
 
@@ -598,4 +602,120 @@ exit 1
   assert.match(loggedCommand, /manage_github_secrets\.py set API_KEY --site app --json/);
   assert.match(loggedCommand, /manage_github_secrets\.py delete API_KEY --site app --json/);
   assert.match(loggedCommand, /manage_github_secrets\.py list --site app --json/);
+});
+
+test("listPorkbunDnsRecords reads domains and records through the Porkbun CLI", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const rootDir = path.join(tmpDir, "root");
+  const scriptsDir = path.join(rootDir, "scripts");
+  const binDir = path.join(tmpDir, "bin");
+
+  await mkdir(scriptsDir, { recursive: true });
+  await mkdir(binDir);
+  await writeFile(path.join(scriptsDir, "manage_porkbun_dns.py"), "print('stub')\n", "utf-8");
+  await writeExecutable(
+    path.join(binDir, "python3"),
+    `#!/usr/bin/env bash
+if [[ "$2" == "--json" && "$3" == "domains" ]]; then
+  cat <<'JSON'
+{"action":"domains","domains":[{"domain":"example.com","status":"ACTIVE","expireDate":"2027-01-01 00:00:00","autoRenew":1}]}
+JSON
+  exit 0
+fi
+if [[ "$2" == "--json" && "$3" == "list" ]]; then
+  cat <<'JSON'
+{"action":"list","domain":"example.com","records":[{"id":"123","name":"www.example.com","type":"A","content":"1.2.3.4","ttl":"600","prio":"0","notes":"web"}]}
+JSON
+  exit 0
+fi
+exit 1
+`
+  );
+
+  await withEnv(
+    {
+      SERVER_SETUP_ROOT: rootDir,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    },
+    async () => {
+      const document = await listPorkbunDnsRecords("example.com");
+      assert.equal(document.domains[0]?.domain, "example.com");
+      assert.equal(document.domains[0]?.autoRenew, true);
+      assert.equal(document.selectedDomain, "example.com");
+      assert.equal(document.records[0]?.id, "123");
+      assert.equal(document.records[0]?.notes, "web");
+    }
+  );
+});
+
+test("Porkbun DNS mutations call the CLI and refresh records", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const rootDir = path.join(tmpDir, "root");
+  const scriptsDir = path.join(rootDir, "scripts");
+  const binDir = path.join(tmpDir, "bin");
+  const logsDir = path.join(tmpDir, "logs");
+
+  await mkdir(scriptsDir, { recursive: true });
+  await mkdir(binDir);
+  await mkdir(logsDir);
+  await writeFile(path.join(scriptsDir, "manage_porkbun_dns.py"), "print('stub')\n", "utf-8");
+  await writeExecutable(
+    path.join(binDir, "python3"),
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${logsDir}/python3.log"
+if [[ "$2" == "--json" && "$3" == "domains" ]]; then
+  printf '{"action":"domains","domains":[{"domain":"example.com","status":"ACTIVE","autoRenew":0}]}\\n'
+  exit 0
+fi
+if [[ "$2" == "--json" && "$3" == "list" ]]; then
+  printf '{"action":"list","domain":"example.com","records":[{"id":"123","name":"www.example.com","type":"A","content":"1.2.3.4","ttl":"600","prio":"0"}]}\\n'
+  exit 0
+fi
+if [[ "$2" == "--json" && ( "$3" == "create" || "$3" == "edit" || "$3" == "delete" ) ]]; then
+  printf '{"status":"SUCCESS"}\\n'
+  exit 0
+fi
+exit 1
+`
+  );
+
+  await withEnv(
+    {
+      SERVER_SETUP_ROOT: rootDir,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    },
+    async () => {
+      const createResponse = await createPorkbunDnsRecord({
+        domain: "example.com",
+        name: "www",
+        type: "A",
+        content: "1.2.3.4",
+        ttl: "600",
+        prio: "",
+        notes: "web",
+      });
+      assert.equal(createResponse.result.action, "create");
+      assert.equal(createResponse.document.records[0]?.name, "www.example.com");
+
+      const updateResponse = await updatePorkbunDnsRecord({
+        domain: "example.com",
+        id: "123",
+        name: "www",
+        type: "A",
+        content: "5.6.7.8",
+        ttl: "600",
+        prio: "",
+        notes: "",
+      });
+      assert.equal(updateResponse.result.action, "edit");
+
+      const deleteResponse = await deletePorkbunDnsRecord("example.com", "123");
+      assert.equal(deleteResponse.result.action, "delete");
+    }
+  );
+
+  const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
+  assert.match(loggedCommand, /manage_porkbun_dns\.py --json create example\.com --type A --name www --content 1\.2\.3\.4 --ttl 600 --notes web/);
+  assert.match(loggedCommand, /manage_porkbun_dns\.py --json edit example\.com 123 --type A --name www --content 5\.6\.7\.8 --ttl 600 --notes/);
+  assert.match(loggedCommand, /manage_porkbun_dns\.py --json delete example\.com 123/);
 });

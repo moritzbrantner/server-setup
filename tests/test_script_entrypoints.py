@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -145,8 +146,9 @@ class EnsureServerToolsTests(unittest.TestCase):
                             with patch.object(self.module, "install_or_update_nodejs"):
                                 with patch.object(self.module, "install_or_update_bun"):
                                     with patch.object(self.module, "install_or_update_gh"):
-                                        with patch.object(self.module, "ensure_postgres_enabled"):
-                                            self.module.main()
+                                        with patch.object(self.module, "install_or_update_namecheap_cli"):
+                                            with patch.object(self.module, "ensure_postgres_enabled"):
+                                                self.module.main()
 
         baseline_packages = install_pkgs.call_args_list[0].args[0]
         self.assertIn("certbot", baseline_packages)
@@ -170,10 +172,65 @@ class EnsureServerToolsTests(unittest.TestCase):
                             with patch.object(self.module, "install_or_update_nodejs") as install_nodejs:
                                 with patch.object(self.module, "install_or_update_bun"):
                                     with patch.object(self.module, "install_or_update_gh"):
-                                        with patch.object(self.module, "ensure_postgres_enabled"):
-                                            self.module.main()
+                                        with patch.object(self.module, "install_or_update_namecheap_cli"):
+                                            with patch.object(self.module, "ensure_postgres_enabled"):
+                                                self.module.main()
 
         install_nodejs.assert_called_once_with()
+
+    def test_main_installs_namecheap_cli(self) -> None:
+        args = argparse.Namespace(skip_docker=True)
+
+        with patch.object(self.module, "parse_args", return_value=args):
+            with patch.object(self.module, "require_root"):
+                with patch.object(
+                    self.module.shutil,
+                    "which",
+                    side_effect=lambda name: "/usr/bin/apt-get" if name == "apt-get" else None,
+                ):
+                    with patch.object(self.module, "run_checked"):
+                        with patch.object(self.module, "install_pkgs"):
+                            with patch.object(self.module, "install_or_update_nodejs"):
+                                with patch.object(self.module, "install_or_update_bun"):
+                                    with patch.object(self.module, "install_or_update_gh"):
+                                        with patch.object(
+                                            self.module,
+                                            "install_or_update_namecheap_cli",
+                                        ) as install_namecheap_cli:
+                                            with patch.object(self.module, "ensure_postgres_enabled"):
+                                                self.module.main()
+
+        install_namecheap_cli.assert_called_once_with()
+
+    def test_install_or_update_namecheap_cli_uses_isolated_venv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            venv = root / "namecheap-cli"
+            link = root / "bin" / "namecheap"
+
+            def fake_run_checked(cmd, env=None, allow_fail=False):
+                if cmd == ["python3", "-m", "venv", str(venv)]:
+                    (venv / "bin").mkdir(parents=True)
+                    (venv / "bin" / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+                if cmd[-1] == f"namecheap-cli=={self.module.DEFAULT_NAMECHEAP_CLI_VERSION}":
+                    (venv / "bin" / "namecheap").write_text("#!/bin/sh\n", encoding="utf-8")
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            with patch.object(self.module, "NAMECHEAP_CLI_VENV", venv):
+                with patch.object(self.module, "NAMECHEAP_CLI_LINK", link):
+                    with patch.object(self.module, "run_checked", side_effect=fake_run_checked) as run_checked:
+                        self.module.install_or_update_namecheap_cli()
+
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(link.resolve(), (venv / "bin" / "namecheap").resolve())
+            self.assertEqual(
+                run_checked.call_args_list[0].args[0],
+                ["python3", "-m", "venv", str(venv)],
+            )
+            self.assertIn(
+                f"namecheap-cli=={self.module.DEFAULT_NAMECHEAP_CLI_VERSION}",
+                run_checked.call_args_list[-1].args[0],
+            )
 
     def test_install_or_update_nodejs_enables_corepack(self) -> None:
         with patch.object(self.module, "configure_nodesource_repo_for_apt") as configure_repo:

@@ -155,6 +155,8 @@ test("dashboard renders important issues and setup details", () => {
   assert.match(markup, /Reload Nginx/);
   assert.match(markup, /Add website/);
   assert.match(markup, /Repository secrets/);
+  assert.match(markup, /Porkbun DNS/);
+  assert.match(markup, /Create record/);
   assert.match(markup, /Push to Main/);
   assert.match(markup, /Retry deploy/);
   assert.match(markup, /The repository must already include a valid root `server\.conf`\./);

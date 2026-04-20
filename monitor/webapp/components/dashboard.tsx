@@ -14,6 +14,8 @@ import type {
   DashboardActionResult,
   EditableConfigDocument,
   GithubSecretsDocument,
+  PorkbunDnsDocument,
+  PorkbunDnsRecord,
   SiteDeploymentSettings,
 } from "@/lib/control";
 import type { DashboardSnapshot, SiteCheck, StatusLevel } from "@/lib/status";
@@ -36,6 +38,16 @@ type GithubSecretDraft = {
   value: string;
 };
 
+type PorkbunDnsDraft = {
+  id: string;
+  name: string;
+  type: string;
+  content: string;
+  ttl: string;
+  prio: string;
+  notes: string;
+};
+
 type GithubSecretSiteOption = {
   siteName: string;
   repoLabel: string;
@@ -53,6 +65,32 @@ const EMPTY_GITHUB_SECRET_DRAFT: GithubSecretDraft = {
   name: "",
   value: "",
 };
+
+const EMPTY_PORKBUN_DNS_DRAFT: PorkbunDnsDraft = {
+  id: "",
+  name: "",
+  type: "A",
+  content: "",
+  ttl: "600",
+  prio: "",
+  notes: "",
+};
+
+const PORKBUN_RECORD_TYPES = [
+  "A",
+  "AAAA",
+  "ALIAS",
+  "CAA",
+  "CNAME",
+  "HTTPS",
+  "MX",
+  "NS",
+  "SRV",
+  "SSHFP",
+  "SVCB",
+  "TLSA",
+  "TXT",
+];
 
 function formatMetric(value: number | null, suffix = ""): string {
   if (value === null || Number.isNaN(value)) {
@@ -200,6 +238,18 @@ function pushDeployTone(application: SiteCheck): string {
   return pillTone(application.pushDeploy?.status || "unknown");
 }
 
+function porkbunRecordNameForDraft(record: PorkbunDnsRecord, domain: string): string {
+  const fqdn = record.name.replace(/\.$/, "");
+  const cleanDomain = domain.replace(/\.$/, "");
+  if (fqdn === cleanDomain) {
+    return "";
+  }
+  if (fqdn.endsWith(`.${cleanDomain}`)) {
+    return fqdn.slice(0, -(cleanDomain.length + 1));
+  }
+  return fqdn;
+}
+
 export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardProps) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [error, setError] = useState<string | null>(null);
@@ -224,6 +274,11 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     deriveGithubSecretSiteOptions(initialSnapshot)[0]?.siteName || ""
   );
   const [githubSecretDraft, setGithubSecretDraft] = useState<GithubSecretDraft>(EMPTY_GITHUB_SECRET_DRAFT);
+  const [porkbunDnsDocument, setPorkbunDnsDocument] = useState<PorkbunDnsDocument | null>(null);
+  const [porkbunDnsDomain, setPorkbunDnsDomain] = useState("");
+  const [porkbunDnsDraft, setPorkbunDnsDraft] = useState<PorkbunDnsDraft>(EMPTY_PORKBUN_DNS_DRAFT);
+  const [porkbunDnsMessage, setPorkbunDnsMessage] = useState<string | null>(null);
+  const [porkbunDnsBusy, setPorkbunDnsBusy] = useState(false);
   const githubSecretSiteOptions = deriveGithubSecretSiteOptions(snapshot);
   const selectedGithubSecretSite =
     githubSecretSiteOptions.find((entry) => entry.siteName === githubSecretsSiteName) || null;
@@ -322,6 +377,44 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     }
   });
 
+  const loadPorkbunDns = useEffectEvent(async (domain: string) => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+
+    setPorkbunDnsBusy(true);
+    try {
+      const suffix = domain.trim() ? `?domain=${encodeURIComponent(domain.trim())}` : "";
+      const response = await fetch(`/api/porkbun-dns${suffix}`, {
+        cache: "no-store",
+        headers: adminHeaders(trimmedToken),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const document = (await response.json()) as PorkbunDnsDocument;
+      startTransition(() => {
+        setPorkbunDnsDocument(document);
+        if (!domain.trim() && document.domains[0]?.domain) {
+          setPorkbunDnsDomain(document.domains[0].domain);
+        }
+        setPorkbunDnsMessage(null);
+        setAdminMessage(null);
+      });
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : "Unable to load Porkbun DNS.";
+      startTransition(() => {
+        setPorkbunDnsDocument(null);
+        setPorkbunDnsMessage(message);
+      });
+    } finally {
+      setPorkbunDnsBusy(false);
+    }
+  });
+
   useEffect(() => {
     const storedToken = window.localStorage.getItem("status-webapp-admin-token") || "";
     if (!storedToken) {
@@ -358,6 +451,13 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     }
     void loadGithubSecrets(githubSecretsSiteName);
   }, [adminUnlocked, githubSecretsSiteName, loadGithubSecrets]);
+
+  useEffect(() => {
+    if (!adminUnlocked) {
+      return;
+    }
+    void loadPorkbunDns(porkbunDnsDomain);
+  }, [adminUnlocked, porkbunDnsDomain, loadPorkbunDns]);
 
   const unlockAdminControls = useEffectEvent(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -638,6 +738,132 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     }
   });
 
+  const updatePorkbunDnsDraft = useEffectEvent((field: keyof PorkbunDnsDraft, value: string) => {
+    setPorkbunDnsDraft((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  });
+
+  const editPorkbunRecord = useEffectEvent((record: PorkbunDnsRecord) => {
+    setPorkbunDnsDraft({
+      id: record.id,
+      name: porkbunRecordNameForDraft(record, porkbunDnsDomain),
+      type: record.type || "A",
+      content: record.content,
+      ttl: record.ttl || "600",
+      prio: record.prio || "",
+      notes: record.notes || "",
+    });
+    setPorkbunDnsMessage(`Editing DNS record ${record.id}.`);
+  });
+
+  const clearPorkbunDnsDraft = useEffectEvent(() => {
+    setPorkbunDnsDraft(EMPTY_PORKBUN_DNS_DRAFT);
+    setPorkbunDnsMessage(null);
+  });
+
+  const savePorkbunDnsRecord = useEffectEvent(async () => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+    if (!porkbunDnsDomain.trim()) {
+      setPorkbunDnsMessage("Select a Porkbun domain first.");
+      return;
+    }
+    if (!porkbunDnsDraft.type.trim()) {
+      setPorkbunDnsMessage("Record type is required.");
+      return;
+    }
+    if (!porkbunDnsDraft.content.trim()) {
+      setPorkbunDnsMessage("Record content is required.");
+      return;
+    }
+
+    setPorkbunDnsBusy(true);
+    try {
+      const response = await fetch("/api/porkbun-dns", {
+        method: porkbunDnsDraft.id ? "PUT" : "POST",
+        headers: adminHeaders(trimmedToken),
+        body: JSON.stringify({
+          domain: porkbunDnsDomain,
+          ...porkbunDnsDraft,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const payload = (await response.json()) as {
+        document: PorkbunDnsDocument;
+        result: { summary: string };
+      };
+      startTransition(() => {
+        setPorkbunDnsDocument(payload.document);
+        setPorkbunDnsMessage(payload.result.summary);
+        setPorkbunDnsDraft(EMPTY_PORKBUN_DNS_DRAFT);
+        setAdminMessage(null);
+      });
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : "Unable to save the Porkbun DNS record.";
+      startTransition(() => {
+        setPorkbunDnsMessage(message);
+      });
+    } finally {
+      setPorkbunDnsBusy(false);
+    }
+  });
+
+  const removePorkbunDnsRecord = useEffectEvent(async (recordId: string) => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+    if (!porkbunDnsDomain.trim()) {
+      setPorkbunDnsMessage("Select a Porkbun domain first.");
+      return;
+    }
+
+    setPorkbunDnsBusy(true);
+    try {
+      const response = await fetch("/api/porkbun-dns", {
+        method: "DELETE",
+        headers: adminHeaders(trimmedToken),
+        body: JSON.stringify({
+          domain: porkbunDnsDomain,
+          id: recordId,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const payload = (await response.json()) as {
+        document: PorkbunDnsDocument;
+        result: { summary: string };
+      };
+      startTransition(() => {
+        setPorkbunDnsDocument(payload.document);
+        setPorkbunDnsMessage(payload.result.summary);
+        if (porkbunDnsDraft.id === recordId) {
+          setPorkbunDnsDraft(EMPTY_PORKBUN_DNS_DRAFT);
+        }
+        setAdminMessage(null);
+      });
+    } catch (deleteError) {
+      const message =
+        deleteError instanceof Error ? deleteError.message : "Unable to delete the Porkbun DNS record.";
+      startTransition(() => {
+        setPorkbunDnsMessage(message);
+      });
+    } finally {
+      setPorkbunDnsBusy(false);
+    }
+  });
+
   const discardConfigChanges = useEffectEvent(() => {
     if (!configDocument) {
       return;
@@ -657,6 +883,10 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     setGithubSecretsDocument(null);
     setGithubSecretsMessage(null);
     setGithubSecretDraft(EMPTY_GITHUB_SECRET_DRAFT);
+    setPorkbunDnsDocument(null);
+    setPorkbunDnsDomain("");
+    setPorkbunDnsDraft(EMPTY_PORKBUN_DNS_DRAFT);
+    setPorkbunDnsMessage(null);
     setActionResult(null);
     setAdminMessage("Admin token cleared from this browser session.");
   });
@@ -1140,6 +1370,213 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
                 No deployed site currently exposes checkout metadata in the active status source.
               </p>
             )}
+          </article>
+
+          <article className="admin-card">
+            <div className="admin-card-head">
+              <div>
+                <h3>Porkbun DNS</h3>
+                <p>Manage DNS records through Porkbun using the server-side API credentials.</p>
+              </div>
+              <mark className={pillTone(porkbunDnsDocument ? "ok" : "unknown")}>
+                {porkbunDnsDocument ? "loaded" : "locked"}
+              </mark>
+            </div>
+            <div className="token-form">
+              <label className="token-field">
+                <span>Domain</span>
+                <select
+                  disabled={!adminUnlocked || porkbunDnsBusy || !porkbunDnsDocument?.domains.length}
+                  onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                    setPorkbunDnsDomain(event.target.value);
+                    setPorkbunDnsDraft(EMPTY_PORKBUN_DNS_DRAFT);
+                    setPorkbunDnsMessage(null);
+                  }}
+                  value={porkbunDnsDomain}
+                >
+                  {porkbunDnsDocument?.domains.length ? (
+                    porkbunDnsDocument.domains.map((domain) => (
+                      <option key={domain.domain} value={domain.domain}>
+                        {domain.domain}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No domains loaded</option>
+                  )}
+                </select>
+              </label>
+              <div className="button-row">
+                <button
+                  className="ghost-button"
+                  disabled={!adminUnlocked || porkbunDnsBusy}
+                  onClick={() => void loadPorkbunDns(porkbunDnsDomain)}
+                  type="button"
+                >
+                  {porkbunDnsBusy ? "Refreshing..." : "Refresh DNS"}
+                </button>
+                {porkbunDnsDraft.id ? (
+                  <button
+                    className="ghost-button"
+                    disabled={!adminUnlocked || porkbunDnsBusy}
+                    onClick={() => void clearPorkbunDnsDraft()}
+                    type="button"
+                  >
+                    Cancel edit
+                  </button>
+                ) : null}
+              </div>
+              <div className="dns-record-form">
+                <label className="token-field">
+                  <span>Type</span>
+                  <select
+                    disabled={!adminUnlocked || porkbunDnsBusy || !porkbunDnsDomain}
+                    onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                      updatePorkbunDnsDraft("type", event.target.value)
+                    }
+                    value={porkbunDnsDraft.type}
+                  >
+                    {PORKBUN_RECORD_TYPES.map((recordType) => (
+                      <option key={recordType} value={recordType}>
+                        {recordType}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="token-field">
+                  <span>Name</span>
+                  <input
+                    disabled={!adminUnlocked || porkbunDnsBusy || !porkbunDnsDomain}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      updatePorkbunDnsDraft("name", event.target.value)
+                    }
+                    placeholder="@, www, *, or full name"
+                    type="text"
+                    value={porkbunDnsDraft.name}
+                  />
+                </label>
+                <label className="token-field">
+                  <span>Content</span>
+                  <input
+                    disabled={!adminUnlocked || porkbunDnsBusy || !porkbunDnsDomain}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      updatePorkbunDnsDraft("content", event.target.value)
+                    }
+                    placeholder="1.2.3.4 or target.example.com"
+                    type="text"
+                    value={porkbunDnsDraft.content}
+                  />
+                </label>
+                <label className="token-field">
+                  <span>TTL</span>
+                  <input
+                    disabled={!adminUnlocked || porkbunDnsBusy || !porkbunDnsDomain}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      updatePorkbunDnsDraft("ttl", event.target.value)
+                    }
+                    placeholder="600"
+                    type="number"
+                    value={porkbunDnsDraft.ttl}
+                  />
+                </label>
+                <label className="token-field">
+                  <span>Priority</span>
+                  <input
+                    disabled={!adminUnlocked || porkbunDnsBusy || !porkbunDnsDomain}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      updatePorkbunDnsDraft("prio", event.target.value)
+                    }
+                    placeholder="MX/SRV only"
+                    type="number"
+                    value={porkbunDnsDraft.prio}
+                  />
+                </label>
+                <label className="token-field">
+                  <span>Notes</span>
+                  <input
+                    disabled={!adminUnlocked || porkbunDnsBusy || !porkbunDnsDomain}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      updatePorkbunDnsDraft("notes", event.target.value)
+                    }
+                    placeholder="Optional"
+                    type="text"
+                    value={porkbunDnsDraft.notes}
+                  />
+                </label>
+              </div>
+              <div className="button-row">
+                <button
+                  className="primary-button"
+                  disabled={
+                    !adminUnlocked ||
+                    porkbunDnsBusy ||
+                    !porkbunDnsDomain ||
+                    !porkbunDnsDraft.type.trim() ||
+                    !porkbunDnsDraft.content.trim()
+                  }
+                  onClick={() => void savePorkbunDnsRecord()}
+                  type="button"
+                >
+                  {porkbunDnsBusy
+                    ? "Saving..."
+                    : porkbunDnsDraft.id
+                      ? "Update record"
+                      : "Create record"}
+                </button>
+              </div>
+            </div>
+            <p className="inline-note">
+              Set `PORKBUN_API_KEY` and `PORKBUN_SECRET_API_KEY` in the status webapp environment.
+              The name field accepts blank or `@` for the root record.
+            </p>
+            {porkbunDnsMessage ? <p className="inline-note">{porkbunDnsMessage}</p> : null}
+            <div className="alert-list dns-record-list">
+              {porkbunDnsDocument?.records.length ? (
+                porkbunDnsDocument.records.map((record) => (
+                  <article className="alert-card alert-ok" key={`${porkbunDnsDomain}-${record.id}`}>
+                    <div className="alert-head">
+                      <div>
+                        <h3>
+                          {record.type} {record.name || porkbunDnsDomain}
+                        </h3>
+                        <p>{record.content}</p>
+                        <p>
+                          TTL {record.ttl || "n/a"} · priority {record.prio || "0"}
+                          {record.notes ? ` · ${record.notes}` : ""}
+                        </p>
+                      </div>
+                      <div className="button-row">
+                        <button
+                          className="ghost-button"
+                          disabled={!adminUnlocked || porkbunDnsBusy}
+                          onClick={() => void editPorkbunRecord(record)}
+                          type="button"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="ghost-button"
+                          disabled={!adminUnlocked || porkbunDnsBusy}
+                          onClick={() => void removePorkbunDnsRecord(record.id)}
+                          type="button"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <article className="alert-card alert-ok">
+                  <div className="alert-head">
+                    <div>
+                      <h3>No DNS records loaded</h3>
+                      <p>Select a domain and refresh DNS records.</p>
+                    </div>
+                    <mark className={pillTone("unknown")}>empty</mark>
+                  </div>
+                </article>
+              )}
+            </div>
           </article>
         </div>
         <div className="panel-content">

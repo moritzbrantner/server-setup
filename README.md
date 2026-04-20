@@ -57,6 +57,7 @@ Fresh host capabilities after `prepare_server.py`:
 - Bun
 - Node.js + `npm` + `corepack` (`pnpm`/`yarn`)
 - Python venv and pip tooling
+- third-party Namecheap DNS CLI (`namecheap`)
 - PostgreSQL
 - Docker, unless `--skip-docker` is supplied
 
@@ -66,8 +67,9 @@ The Next.js status webapp is the supported dashboard for this repository.
 
 If you want to use its admin controls:
 1. Set `STATUS_WEBAPP_ADMIN_TOKEN` in `/etc/default/server-setup-status-webapp`.
-2. Restart `server-setup-status-webapp.service`.
-3. Send the token in the `x-status-admin-token` header when calling admin APIs.
+2. To manage Porkbun DNS from the dashboard, also set `PORKBUN_API_KEY` and `PORKBUN_SECRET_API_KEY`.
+3. Restart `server-setup-status-webapp.service`.
+4. Send the token in the `x-status-admin-token` header when calling admin APIs.
 
 `--email` is required the first time you run it. Later runs can reuse the stored default.
 
@@ -205,6 +207,38 @@ python3 ./scripts/manage_github_secrets.py delete MY_SECRET --site your-app
 ```
 
 The script scans `.github/workflows/*.yml` and `.github/workflows/*.yaml` in the checked-out repository for `secrets.*` references, then stores values in the repo-local env file. If the repo has a root `.env.example`, the managed target is the matching `.env`; otherwise the script falls back to the runtime env file or `./.env`.
+
+Manage Porkbun DNS records from the terminal:
+
+```bash
+export PORKBUN_API_KEY=pk_...
+export PORKBUN_SECRET_API_KEY=sk_...
+
+python3 ./scripts/manage_porkbun_dns.py domains
+python3 ./scripts/manage_porkbun_dns.py list example.com
+python3 ./scripts/manage_porkbun_dns.py create example.com --type A --name www --content 203.0.113.10
+python3 ./scripts/manage_porkbun_dns.py edit example.com 123456 --type A --name www --content 203.0.113.20
+python3 ./scripts/manage_porkbun_dns.py delete example.com 123456
+```
+
+The status webapp exposes the same list/create/edit/delete flow after admin unlock. Porkbun API access must be enabled for the domains you want to manage.
+
+Manage Namecheap DNS records from the terminal with the installed third-party `namecheap` CLI:
+
+```bash
+export NAMECHEAP_API_KEY="your-api-key"
+export NAMECHEAP_API_USER="your-api-user"
+export NAMECHEAP_USERNAME="your-username"
+export NAMECHEAP_CLIENT_IP="your-whitelisted-ip"
+
+namecheap domains
+namecheap records example.com
+namecheap add -d example.com -t A -h www -v 203.0.113.10 -l 3600
+namecheap update -d example.com -t A -h www -v 203.0.113.20 -l 3600
+namecheap delete -d example.com -t A -h www
+```
+
+Namecheap API access must be enabled in the account, and the client IP must be whitelisted in Namecheap API settings.
 
 Stop managed services:
 

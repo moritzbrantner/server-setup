@@ -11,6 +11,9 @@ from pathlib import Path
 
 DEFAULT_BUN_INSTALL = "/root/.bun"
 DEFAULT_NODE_MAJOR = "22"
+DEFAULT_NAMECHEAP_CLI_VERSION = "0.2.0"
+NAMECHEAP_CLI_VENV = Path("/opt/server-setup/namecheap-cli")
+NAMECHEAP_CLI_LINK = Path("/usr/local/bin/namecheap")
 
 
 def log(message: str) -> None:
@@ -65,6 +68,22 @@ def ensure_bun_symlink(env: dict[str, str]) -> None:
             link_path.symlink_to(target)
     except OSError:
         pass
+
+
+def ensure_tool_symlink(target: Path, link_path: Path) -> None:
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if link_path.is_symlink():
+            if link_path.resolve() != target.resolve():
+                link_path.unlink()
+                link_path.symlink_to(target)
+            return
+        if link_path.exists():
+            log(f"Leaving existing {link_path}; use {target} directly if needed.")
+            return
+        link_path.symlink_to(target)
+    except OSError as error:
+        raise SystemExit(f"Unable to create {link_path} symlink for {target}: {error}") from error
 
 
 def configure_docker_repo_for_apt() -> None:
@@ -204,6 +223,31 @@ def install_or_update_gh() -> None:
     install_pkgs(["gh"])
 
 
+def install_or_update_namecheap_cli() -> None:
+    log(f"Installing Namecheap CLI {DEFAULT_NAMECHEAP_CLI_VERSION} in an isolated Python venv")
+    NAMECHEAP_CLI_VENV.parent.mkdir(parents=True, exist_ok=True)
+    python_path = NAMECHEAP_CLI_VENV / "bin" / "python"
+    if not python_path.is_file():
+        run_checked(["python3", "-m", "venv", str(NAMECHEAP_CLI_VENV)])
+
+    run_checked([str(python_path), "-m", "pip", "install", "--upgrade", "pip"])
+    run_checked(
+        [
+            str(python_path),
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            f"namecheap-cli=={DEFAULT_NAMECHEAP_CLI_VERSION}",
+        ]
+    )
+
+    cli_path = NAMECHEAP_CLI_VENV / "bin" / "namecheap"
+    if not cli_path.is_file():
+        raise SystemExit(f"Namecheap CLI validation failed: {cli_path} was not installed.")
+    ensure_tool_symlink(cli_path, NAMECHEAP_CLI_LINK)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install baseline server tools.")
     parser.add_argument("--skip-docker", action="store_true")
@@ -246,6 +290,7 @@ def main() -> None:
     install_or_update_nodejs()
     install_or_update_bun()
     install_or_update_gh()
+    install_or_update_namecheap_cli()
     ensure_postgres_enabled()
 
     if args.skip_docker:
@@ -253,7 +298,7 @@ def main() -> None:
     else:
         install_and_enable_docker()
 
-    log("Finished: tools, Node.js, bun, nginx, postgres, and docker bootstrap steps are complete.")
+    log("Finished: tools, Node.js, bun, nginx, postgres, Namecheap CLI, and docker bootstrap steps are complete.")
 
 
 if __name__ == "__main__":

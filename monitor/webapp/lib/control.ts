@@ -73,6 +73,49 @@ export type GithubSecretMutationResult = {
   finishedAt: string;
 };
 
+export type PorkbunDomainRecord = {
+  domain: string;
+  status: string | null;
+  expireDate: string | null;
+  autoRenew: boolean | null;
+};
+
+export type PorkbunDnsRecord = {
+  id: string;
+  name: string;
+  type: string;
+  content: string;
+  ttl: string;
+  prio: string | null;
+  notes: string | null;
+};
+
+export type PorkbunDnsDocument = {
+  domains: PorkbunDomainRecord[];
+  selectedDomain: string | null;
+  records: PorkbunDnsRecord[];
+  fetchedAt: string;
+};
+
+export type PorkbunDnsRecordDraft = {
+  domain: string;
+  id?: string;
+  name: string;
+  type: string;
+  content: string;
+  ttl: string;
+  prio: string;
+  notes: string;
+};
+
+export type PorkbunDnsMutationResult = {
+  action: "create" | "edit" | "delete";
+  domain: string;
+  id: string | null;
+  summary: string;
+  finishedAt: string;
+};
+
 type JsonRecord = Record<string, unknown>;
 type CommandOptions = {
   timeout?: number;
@@ -322,7 +365,7 @@ async function runProcess(
 
       const failure = new Error(
         timedOut ? `Command timed out after ${timeoutMs}ms.` : `Command exited with status ${code ?? "unknown"}.`
-      ) as NodeJS.ErrnoException & {
+      ) as Error & {
         stdout?: string;
         stderr?: string;
         code?: number | string;
@@ -367,6 +410,35 @@ async function runJsonScript(
   }
 }
 
+async function runPorkbunJsonScript(args: string[]): Promise<JsonRecord> {
+  try {
+    const { stdout } = await runProcess(
+      "python3",
+      [resolveRepoPath("scripts/manage_porkbun_dns.py"), "--json", ...args],
+      {
+        timeout: 60 * 1000,
+      }
+    );
+    const parsed = JSON.parse(stdout || "{}") as unknown;
+    if (typeof parsed !== "object" || parsed === null) {
+      throw new Error("Expected a JSON object response.");
+    }
+    return parsed as JsonRecord;
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & {
+      stdout?: string;
+      stderr?: string;
+      code?: string | number;
+    };
+    const detail = outputTail(failure.stdout || "", failure.stderr || "");
+    const reason =
+      typeof failure.code === "number"
+        ? `Command exited with status ${failure.code}.`
+        : failure.message || "Command execution failed.";
+    throw new Error(detail ? `${reason}\n${detail}` : reason);
+  }
+}
+
 function parseGithubSecretsDocument(payload: JsonRecord): GithubSecretsDocument {
   const repo = typeof payload.repo === "string" && payload.repo.trim() ? payload.repo.trim() : null;
   const checkoutPath =
@@ -378,7 +450,9 @@ function parseGithubSecretsDocument(payload: JsonRecord): GithubSecretsDocument 
   }
 
   const workflowFiles = Array.isArray(payload.workflowFiles)
-    ? payload.workflowFiles.filter((entry): entry is string => typeof entry === "string" && entry.trim())
+    ? payload.workflowFiles.filter(
+        (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
+      )
     : [];
 
   const secrets = Array.isArray(payload.secrets)
@@ -391,7 +465,7 @@ function parseGithubSecretsDocument(payload: JsonRecord): GithubSecretsDocument 
           presentInEnvFile: entry.presentInEnvFile === true,
           requiredByWorkflows: Array.isArray(entry.requiredByWorkflows)
             ? entry.requiredByWorkflows.filter(
-                (item): item is string => typeof item === "string" && item.trim()
+                (item): item is string => typeof item === "string" && item.trim().length > 0
               )
             : [],
         }))
@@ -406,6 +480,50 @@ function parseGithubSecretsDocument(payload: JsonRecord): GithubSecretsDocument 
     secrets,
     fetchedAt: new Date().toISOString(),
   };
+}
+
+function parsePorkbunDomains(payload: JsonRecord): PorkbunDomainRecord[] {
+  return Array.isArray(payload.domains)
+    ? payload.domains
+        .map((entry) => asRecord(entry))
+        .filter((entry) => typeof entry.domain === "string" && entry.domain.trim())
+        .map((entry) => ({
+          domain: String(entry.domain).trim(),
+          status: typeof entry.status === "string" && entry.status.trim() ? entry.status.trim() : null,
+          expireDate:
+            typeof entry.expireDate === "string" && entry.expireDate.trim()
+              ? entry.expireDate.trim()
+              : null,
+          autoRenew:
+            entry.autoRenew === 1 || entry.autoRenew === "1"
+              ? true
+              : entry.autoRenew === 0 || entry.autoRenew === "0"
+                ? false
+                : null,
+        }))
+    : [];
+}
+
+function parsePorkbunRecords(payload: JsonRecord): PorkbunDnsRecord[] {
+  return Array.isArray(payload.records)
+    ? payload.records
+        .map((entry) => asRecord(entry))
+        .filter((entry) => typeof entry.id === "string" && entry.id.trim())
+        .map((entry) => ({
+          id: String(entry.id).trim(),
+          name: typeof entry.name === "string" ? entry.name.trim() : "",
+          type: typeof entry.type === "string" ? entry.type.trim().toUpperCase() : "",
+          content: typeof entry.content === "string" ? entry.content : "",
+          ttl: typeof entry.ttl === "string" ? entry.ttl.trim() : String(entry.ttl || ""),
+          prio:
+            entry.prio === null || entry.prio === undefined
+              ? null
+              : typeof entry.prio === "string"
+                ? entry.prio.trim()
+                : String(entry.prio),
+          notes: typeof entry.notes === "string" ? entry.notes : null,
+        }))
+    : [];
 }
 
 async function resolveDeployRegistryPath(): Promise<string> {
@@ -567,6 +685,103 @@ export async function deleteGithubSecret(
         typeof payload.message === "string" && payload.message.trim()
           ? payload.message.trim()
           : `Deleted repository secret ${trimmedName}.`,
+      finishedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export async function listPorkbunDnsRecords(domain = ""): Promise<PorkbunDnsDocument> {
+  const domainsPayload = await runPorkbunJsonScript(["domains"]);
+  const domains = parsePorkbunDomains(domainsPayload);
+  const selectedDomain = domain.trim() || null;
+  const records = selectedDomain
+    ? parsePorkbunRecords(await runPorkbunJsonScript(["list", selectedDomain]))
+    : [];
+
+  return {
+    domains,
+    selectedDomain,
+    records,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+function porkbunRecordArgs(record: PorkbunDnsRecordDraft, includeEmptyNotes = false): string[] {
+  const domain = readRequiredString(record.domain, "Domain");
+  const type = readRequiredString(record.type, "Record type").toUpperCase();
+  const content = readRequiredString(record.content, "Record content");
+  const args = [
+    domain,
+    "--type",
+    type,
+    "--name",
+    record.name.trim(),
+    "--content",
+    content,
+  ];
+
+  if (record.ttl.trim()) {
+    args.push("--ttl", record.ttl.trim());
+  }
+  if (record.prio.trim()) {
+    args.push("--prio", record.prio.trim());
+  }
+  if (record.notes.trim() || includeEmptyNotes) {
+    args.push("--notes", record.notes);
+  }
+
+  return args;
+}
+
+export async function createPorkbunDnsRecord(
+  record: PorkbunDnsRecordDraft
+): Promise<{ document: PorkbunDnsDocument; result: PorkbunDnsMutationResult }> {
+  const domain = readRequiredString(record.domain, "Domain");
+  await runPorkbunJsonScript(["create", ...porkbunRecordArgs({ ...record, domain })]);
+  return {
+    document: await listPorkbunDnsRecords(domain),
+    result: {
+      action: "create",
+      domain,
+      id: null,
+      summary: `Created ${record.type.toUpperCase()} record in ${domain}.`,
+      finishedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export async function updatePorkbunDnsRecord(
+  record: PorkbunDnsRecordDraft
+): Promise<{ document: PorkbunDnsDocument; result: PorkbunDnsMutationResult }> {
+  const domain = readRequiredString(record.domain, "Domain");
+  const id = readRequiredString(record.id, "Record ID");
+  await runPorkbunJsonScript(["edit", domain, id, ...porkbunRecordArgs({ ...record, domain }, true).slice(1)]);
+  return {
+    document: await listPorkbunDnsRecords(domain),
+    result: {
+      action: "edit",
+      domain,
+      id,
+      summary: `Updated DNS record ${id} for ${domain}.`,
+      finishedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export async function deletePorkbunDnsRecord(
+  domain: string,
+  id: string
+): Promise<{ document: PorkbunDnsDocument; result: PorkbunDnsMutationResult }> {
+  const trimmedDomain = readRequiredString(domain, "Domain");
+  const trimmedId = readRequiredString(id, "Record ID");
+  await runPorkbunJsonScript(["delete", trimmedDomain, trimmedId]);
+  return {
+    document: await listPorkbunDnsRecords(trimmedDomain),
+    result: {
+      action: "delete",
+      domain: trimmedDomain,
+      id: trimmedId,
+      summary: `Deleted DNS record ${trimmedId} from ${trimmedDomain}.`,
       finishedAt: new Date().toISOString(),
     },
   };
