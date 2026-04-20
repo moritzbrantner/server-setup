@@ -22,8 +22,7 @@ dump_diagnostics() {
   docker logs "$CONTAINER_NAME" >&2 || true
   docker exec "$CONTAINER_NAME" bash -lc '
     systemctl status nginx --no-pager || true
-    systemctl status tlm-deutschland.service --no-pager || true
-    journalctl -u tlm-deutschland.service --no-pager -n 200 || true
+    find /etc/nginx/sites-available -maxdepth 1 -type f -name "simple-site*.conf" -print -exec sed -n "1,160p" {} \; || true
     find /var/log/server-setup -maxdepth 1 -type f -name "*.log" -print -exec tail -n 200 {} \; || true
   ' >&2 || true
 }
@@ -55,49 +54,29 @@ wait_for_container_command() {
   return 1
 }
 
-verify_tlm_repo_access() {
-  if [[ -z "${TLM_DEUTSCHLAND_GITHUB_TOKEN:-}" ]]; then
-    echo "TLM_DEUTSCHLAND_GITHUB_TOKEN must be set for tlm-deutschland deploy tests." >&2
-    return 1
-  fi
-
-  if docker exec "$CONTAINER_NAME" bash -lc 'git ls-remote "https://x-access-token:${TLM_DEUTSCHLAND_GITHUB_TOKEN}@github.com/moritzbrantner/tlm-deutschland.git" HEAD >/dev/null 2>&1'; then
-    return 0
-  fi
-
-  echo "Unable to access tlm-deutschland on GitHub from the sandbox using TLM_DEUTSCHLAND_GITHUB_TOKEN." >&2
-  return 1
-}
-
-test_docker_sandbox_deploys_tlm_deutschland() {
-  if [[ -z "${TLM_DEUTSCHLAND_GITHUB_TOKEN:-}" ]]; then
-    echo "Skipping tlm-deutschland Docker deploy test because TLM_DEUTSCHLAND_GITHUB_TOKEN is not set."
-    return 0
-  fi
-
+test_docker_sandbox_deploys_seeded_example_site() {
   docker run -d \
     --privileged \
     --cgroupns=host \
     --name "$CONTAINER_NAME" \
-    -e TLM_DEUTSCHLAND_GITHUB_TOKEN="${TLM_DEUTSCHLAND_GITHUB_TOKEN:-}" \
+    -e SKIP_EXAMPLE_DEPLOY=1 \
     -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
     "$IMAGE_NAME" >/dev/null
 
   wait_for_container_command 'systemctl list-units >/dev/null'
   docker exec "$CONTAINER_NAME" bash -lc 'shellcheck --version >/dev/null'
   docker exec "$CONTAINER_NAME" bash -lc 'bun --version >/dev/null'
-  verify_tlm_repo_access
   docker exec "$CONTAINER_NAME" bash -lc '
     cd /opt/server-setup
     python3 ./scripts/prepare_server.py --email admin@example.com --skip-docker
-    python3 ./scripts/deploy_repo.py --repo-url https://github.com/moritzbrantner/tlm-deutschland.git --dest /root/apps/tlm-deutschland --email admin@example.com --skip-github-hook
+    python3 ./scripts/deploy_repo.py --repo-url /srv/apps/simple-site --dest /srv/apps/simple-site --email admin@example.com --skip-github-hook --skip-tls
   '
 
-  docker exec "$CONTAINER_NAME" bash -lc 'test -f /root/apps/tlm-deutschland/.next/BUILD_ID'
-  docker exec "$CONTAINER_NAME" bash -lc 'systemctl is-active --quiet tlm-deutschland.service'
-  docker exec "$CONTAINER_NAME" bash -lc "curl -fsS -H 'Host: tlm-deutschland.de' http://127.0.0.1/ >/dev/null"
+  docker exec "$CONTAINER_NAME" bash -lc 'test -f /srv/apps/simple-site/public/index.html'
+  docker exec "$CONTAINER_NAME" bash -lc 'test -f /etc/nginx/sites-available/simple-site.conf'
+  docker exec "$CONTAINER_NAME" bash -lc "curl -fsS -H 'Host: simple.localhost' http://127.0.0.1/ >/dev/null"
 }
 
-run_test "docker sandbox deploys tlm-deutschland from GitHub" test_docker_sandbox_deploys_tlm_deutschland
+run_test "docker sandbox deploys seeded example site" test_docker_sandbox_deploys_seeded_example_site
 
 echo "All tests passed: $pass_count"

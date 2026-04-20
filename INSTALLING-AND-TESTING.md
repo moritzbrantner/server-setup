@@ -96,7 +96,7 @@ Useful sandbox commands:
 
 ```bash
 python3 ./scripts/prepare_server.py --email admin@example.com --skip-docker
-python3 ./scripts/deploy_repo.py --repo-url /srv/apps/simple-site --dest /srv/apps/simple-site --email admin@example.com --skip-github-hook
+python3 ./scripts/deploy_repo.py --repo-url /srv/apps/simple-site --dest /srv/apps/simple-site --email admin@example.com --skip-github-hook --skip-tls
 python3 ./scripts/manage_services.py
 ```
 
@@ -104,18 +104,16 @@ Optional pre-release integration check:
 
 ```bash
 docker build -t server-setup-test .
-TLM_DEUTSCHLAND_GITHUB_TOKEN=github_pat_... \
-  IMAGE_NAME=server-setup-test \
-  ./tests/test_docker_sandbox.sh
+IMAGE_NAME=server-setup-test ./tests/test_docker_sandbox.sh
 ```
 
-Equivalent Make target after setting `TLM_DEUTSCHLAND_GITHUB_TOKEN` and `IMAGE_NAME`:
+Equivalent Make target after setting `IMAGE_NAME`:
 
 ```bash
 make docker-sandbox-test
 ```
 
-This check is intentionally outside `./tests/run-tests.sh` because it needs privileged Docker, systemd-in-container support, network access, and a GitHub token with access to the deployment test repository. If `TLM_DEUTSCHLAND_GITHUB_TOKEN` is not set, the script reports a skip instead of failing.
+This check is intentionally outside `./tests/run-tests.sh` because it needs privileged Docker and systemd-in-container support.
 
 ## Release checklist
 
@@ -124,7 +122,7 @@ Before merging or tagging a release:
 1. Run `make lint`.
 2. Run `make test`.
 3. Confirm `git status --short` contains only intentional tracked changes.
-4. If Docker, network access, and `TLM_DEUTSCHLAND_GITHUB_TOKEN` are available, run the optional Docker sandbox integration check.
+4. If Docker is available, run the optional Docker sandbox integration check.
 5. Review `CHANGELOG.md` and move relevant `Unreleased` notes into the release entry.
 6. Confirm no generated host state, secrets, `.env` files, `node_modules`, `.next`, or `tsconfig.tsbuildinfo` files are staged.
 

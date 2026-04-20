@@ -649,6 +649,7 @@ def deploy_registry_entry(
     configure_webhook: bool,
     webhook_secret: str = "",
     webhook_url: str = "",
+    skip_tls: bool = False,
 ) -> DeployResult:
     ctx = DeployContext()
     ctx.init_runtime_dirs()
@@ -697,21 +698,25 @@ def deploy_registry_entry(
             stage = "nginx config"
             nginx_snapshot = capture_nginx_site_snapshot(ctx, site_name)
             apply_nginx_site_config(ctx, site_name, deploy_config, checkout_path)
-            include_www = deploy_config["nginx"]["www_redirect"] or f"www.{deploy_config['domain']}" in deploy_config["nginx"]["tls_hostnames"]
-            stage = "dns verification"
-            ensure_dns_points_here(deploy_config["domain"], include_www=include_www)
-            stage = "tls setup"
-            run_checked(
-                [
-                    "python3",
-                    str(Path(__file__).resolve().parent / "setup_letsencrypt.py"),
-                    "--domain",
-                    deploy_config["domain"],
-                    "--email",
-                    tls_email,
-                    *(["--www"] if include_www else []),
-                ]
-            )
+            if not skip_tls:
+                include_www = (
+                    deploy_config["nginx"]["www_redirect"]
+                    or f"www.{deploy_config['domain']}" in deploy_config["nginx"]["tls_hostnames"]
+                )
+                stage = "dns verification"
+                ensure_dns_points_here(deploy_config["domain"], include_www=include_www)
+                stage = "tls setup"
+                run_checked(
+                    [
+                        "python3",
+                        str(Path(__file__).resolve().parent / "setup_letsencrypt.py"),
+                        "--domain",
+                        deploy_config["domain"],
+                        "--email",
+                        tls_email,
+                        *(["--www"] if include_www else []),
+                    ]
+                )
             stage = "post_deploy hook"
             run_optional(deploy_config["deploy_hooks"].get("post_deploy"), cwd=checkout_path)
         except Exception as exc:

@@ -9,23 +9,23 @@ write_registry_fixture() {
   cat >"$registry_path" <<'JSON'
 [
   {
-    "name": "tlm-deutschland",
-    "repo_url": "https://github.com/example/tlm-deutschland.git",
+    "name": "sample-service",
+    "repo_url": "https://github.com/example/sample-service.git",
     "branch": "main",
-    "checkout_path": "/srv/apps/tlm-deutschland",
-    "server_conf_path": "/srv/apps/tlm-deutschland/server.conf",
-    "service_name": "tlm-deutschland.service",
-    "domain": "tlm-deutschland.de",
-    "webhook_repo": "example/tlm-deutschland",
+    "checkout_path": "/srv/apps/sample-service",
+    "server_conf_path": "/srv/apps/sample-service/server.conf",
+    "service_name": "sample-service.service",
+    "domain": "sample.example.com",
+    "webhook_repo": "example/sample-service",
     "managed_by": "deploy-repo",
     "deploy_config": {
-      "name": "tlm-deutschland",
-      "domain": "tlm-deutschland.de",
+      "name": "sample-service",
+      "domain": "sample.example.com",
       "runtime": {
         "mode": "service"
       },
       "service": {
-        "name": "tlm-deutschland.service"
+        "name": "sample-service.service"
       }
     }
   }
@@ -48,7 +48,7 @@ case "$command" in
   show)
     unit="${1:-}"
     case "$unit" in
-      tlm-deutschland.service)
+      sample-service.service)
         cat <<'EOF'
 LoadState=loaded
 ActiveState=active
@@ -112,9 +112,9 @@ test_manage_services_lists_unit_status_and_app_mapping() {
 
   grep -Fq 'SERVICE' <<<"$output"
   grep -Fq 'site-webhook-receiver.service' <<<"$output"
-  grep -Fq 'tlm-deutschland.service' <<<"$output"
+  grep -Fq 'sample-service.service' <<<"$output"
   grep -Fq 'automation' <<<"$output"
-  grep -Fq 'tlm-deutschland' <<<"$output"
+  grep -Fq 'sample-service' <<<"$output"
   grep -Fq 'yes' <<<"$output"
   grep -Fq 'no' <<<"$output"
 }
@@ -130,10 +130,10 @@ test_manage_services_filters_and_runs_dry_run_action() {
   local output
   output="$(
     PATH="$tmp/bin:$PATH" \
-      python3 "$ROOT_DIR/scripts/manage_services.py" restart --app tlm-deutschland --dry-run --config "$registry_path"
+      python3 "$ROOT_DIR/scripts/manage_services.py" restart --app sample-service --dry-run --config "$registry_path"
   )"
 
-  grep -Fq '+ systemctl restart tlm-deutschland.service' <<<"$output"
+  grep -Fq '+ systemctl restart sample-service.service' <<<"$output"
   if grep -Fq 'site-webhook-receiver.service' <<<"$output"; then
     echo "Unexpected extra service action in output:" >&2
     echo "$output" >&2

@@ -42,6 +42,7 @@ def main() -> None:
                 "--email",
                 tls_email,
                 "--skip-github-hook",
+                "--skip-tls",
             ],
             check=True,
             cwd=root_dir,

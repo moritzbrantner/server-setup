@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--branch", default="")
     parser.add_argument("--email", default="")
     parser.add_argument("--skip-github-hook", action="store_true")
+    parser.add_argument("--skip-tls", action="store_true", help="Skip DNS verification and Let's Encrypt setup.")
     return parser.parse_args()
 
 
@@ -101,6 +102,7 @@ def main() -> None:
         configure_webhook=not args.skip_github_hook,
         webhook_secret=webhook_secret,
         webhook_url=detected_webhook_url,
+        skip_tls=args.skip_tls,
     )
 
     print("[done] Deployment summary")

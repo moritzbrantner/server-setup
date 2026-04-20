@@ -241,6 +241,7 @@ class StartExampleAppsTests(unittest.TestCase):
             "--email",
             "ops@example.com",
             "--skip-github-hook",
+            "--skip-tls",
         ]
         expected_beta = [
             "python3",
@@ -252,6 +253,7 @@ class StartExampleAppsTests(unittest.TestCase):
             "--email",
             "ops@example.com",
             "--skip-github-hook",
+            "--skip-tls",
         ]
 
         self.assertEqual(len(readiness_cmds), 2)

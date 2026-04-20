@@ -50,6 +50,36 @@ class DeployEngineTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
+    def _static_entry(self, checkout: pathlib.Path) -> dict:
+        return {
+            "name": "static-app",
+            "repo_url": "https://github.com/example/static-app.git",
+            "branch": "main",
+            "checkout_path": str(checkout),
+            "server_conf_path": str(checkout / "server.conf"),
+            "service_name": "static-app.service",
+            "domain": "static.example.com",
+            "webhook_repo": "example/static-app",
+            "managed_by": "deploy-repo",
+            "deploy_config": {
+                "name": "static-app",
+                "domain": "static.example.com",
+                "build_output": "public",
+                "web_root": None,
+                "deploy_hooks": {"pre_deploy": None, "build": None, "post_deploy": None},
+                "runtime": {
+                    "mode": "static",
+                    "working_dir": ".",
+                    "user": "root",
+                    "health_endpoint": "/health",
+                    "health_retries": 1,
+                    "health_interval_seconds": 1,
+                },
+                "service": {"name": "static-app.service"},
+                "nginx": {"www_redirect": False, "tls_hostnames": ["static.example.com"]},
+            },
+        }
+
     def _service_entry(self, checkout: pathlib.Path) -> dict:
         return {
             "name": "service-app",
@@ -134,6 +164,31 @@ class DeployEngineTests(unittest.TestCase):
             state_path = pathlib.Path(env["STATE_DIR"]) / "static-app.json"
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["last_deploy_status"], "success")
+
+    def test_deploy_registry_entry_skip_tls_skips_dns_and_letsencrypt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self._base_env(tmp)
+            pathlib.Path(env["NGINX_SITE_AVAILABLE_DIR"]).mkdir(parents=True, exist_ok=True)
+            pathlib.Path(env["NGINX_SITE_ENABLED_DIR"]).mkdir(parents=True, exist_ok=True)
+            checkout = pathlib.Path(tmp) / "app"
+            (checkout / "public").mkdir(parents=True)
+            (checkout / "public" / "index.html").write_text("ok", encoding="utf-8")
+            entry = self._static_entry(checkout)
+
+            with patch.dict(os.environ, env, clear=False):
+                with patch.object(self.module, "run_checked", return_value=subprocess.CompletedProcess([], 0, "", "")) as run_checked_mock:
+                    with patch.object(self.module, "run", side_effect=self._run_side_effect):
+                        with patch.object(self.module, "ensure_dns_points_here") as dns_mock:
+                            self.module.deploy_registry_entry(
+                                entry,
+                                tls_email="ops@example.com",
+                                configure_webhook=False,
+                                skip_tls=True,
+                            )
+
+            dns_mock.assert_not_called()
+            commands = [args[0] for args, _kwargs in run_checked_mock.call_args_list]
+            self.assertFalse(any("setup_letsencrypt.py" in " ".join(command) for command in commands))
 
     def test_deploy_registry_entry_succeeds_for_service_site(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

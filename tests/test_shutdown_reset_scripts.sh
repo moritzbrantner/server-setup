@@ -9,23 +9,23 @@ write_registry_fixture() {
   cat >"$registry_path" <<'JSON'
 [
   {
-    "name": "tlm-deutschland",
-    "repo_url": "https://github.com/example/tlm-deutschland.git",
+    "name": "sample-service",
+    "repo_url": "https://github.com/example/sample-service.git",
     "branch": "main",
-    "checkout_path": "/srv/apps/tlm-deutschland",
-    "server_conf_path": "/srv/apps/tlm-deutschland/server.conf",
-    "service_name": "tlm-deutschland.service",
-    "domain": "tlm-deutschland.de",
-    "webhook_repo": "example/tlm-deutschland",
+    "checkout_path": "/srv/apps/sample-service",
+    "server_conf_path": "/srv/apps/sample-service/server.conf",
+    "service_name": "sample-service.service",
+    "domain": "sample.example.com",
+    "webhook_repo": "example/sample-service",
     "managed_by": "deploy-repo",
     "deploy_config": {
-      "name": "tlm-deutschland",
-      "domain": "tlm-deutschland.de",
+      "name": "sample-service",
+      "domain": "sample.example.com",
       "runtime": {
         "mode": "service"
       },
       "service": {
-        "name": "tlm-deutschland.service"
+        "name": "sample-service.service"
       }
     }
   }
@@ -44,7 +44,7 @@ test_shutdown_websites_dry_run_lists_managed_units() {
 
   grep -Fq 'systemctl stop site-webhook-receiver.service' <<<"$output"
   grep -Fq 'systemctl stop server-setup-status-webapp.service' <<<"$output"
-  grep -Fq 'systemctl stop tlm-deutschland.service' <<<"$output"
+  grep -Fq 'systemctl stop sample-service.service' <<<"$output"
   grep -Fq 'systemctl stop nginx.service' <<<"$output"
 }
 
@@ -57,13 +57,13 @@ test_reset_server_setup_dry_run_lists_cleanup_targets() {
   write_registry_fixture "$registry_path"
   output="$(python3 "$ROOT_DIR/scripts/reset_server_setup.py" --config "$registry_path" --dry-run)"
 
-  grep -Fq 'systemctl disable tlm-deutschland.service' <<<"$output"
-  grep -Fq 'remove /etc/systemd/system/tlm-deutschland.service' <<<"$output"
+  grep -Fq 'systemctl disable sample-service.service' <<<"$output"
+  grep -Fq 'remove /etc/systemd/system/sample-service.service' <<<"$output"
   grep -Fq "remove $registry_path" <<<"$output"
   grep -Fq 'remove /etc/default/site-automation' <<<"$output"
   grep -Fq 'remove /etc/default/server-setup-status-webapp' <<<"$output"
-  grep -Fq 'remove /etc/nginx/sites-available/tlm-deutschland.conf' <<<"$output"
-  grep -Fq 'remove /var/lib/server-setup/state/tlm-deutschland.json' <<<"$output"
+  grep -Fq 'remove /etc/nginx/sites-available/sample-service.conf' <<<"$output"
+  grep -Fq 'remove /var/lib/server-setup/state/sample-service.json' <<<"$output"
   grep -Fq 'systemctl daemon-reload' <<<"$output"
 }
 

@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
         "--app",
         action="append",
         default=[],
-        help="Filter by app owner. Repeat for multiple apps, for example --app tlm-deutschland.",
+        help="Filter by app owner. Repeat for multiple apps, for example --app sample-service.",
     )
     parser.add_argument(
         "--service",
