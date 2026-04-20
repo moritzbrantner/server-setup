@@ -73,6 +73,38 @@ export type GithubSecretMutationResult = {
   finishedAt: string;
 };
 
+export type DomainDnsRecord = {
+  id: string;
+  type: string;
+  name: string;
+  content: string;
+  ttl: number;
+  prio: number | null;
+};
+
+export type DomainRecordsDocument = {
+  siteName: string | null;
+  domain: string | null;
+  provider: string;
+  zone: string;
+  records: DomainDnsRecord[];
+  fetchedAt: string;
+};
+
+export type DomainRecordMutation = Omit<DomainDnsRecord, "id"> & {
+  id?: string;
+};
+
+export type DomainRecordMutationResult = {
+  action: "create" | "update" | "delete";
+  siteName: string | null;
+  domain: string | null;
+  provider: string;
+  zone: string;
+  summary: string;
+  finishedAt: string;
+};
+
 type JsonRecord = Record<string, unknown>;
 type CommandOptions = {
   timeout?: number;
@@ -322,7 +354,7 @@ async function runProcess(
 
       const failure = new Error(
         timedOut ? `Command timed out after ${timeoutMs}ms.` : `Command exited with status ${code ?? "unknown"}.`
-      ) as NodeJS.ErrnoException & {
+      ) as Error & {
         stdout?: string;
         stderr?: string;
         code?: number | string;
@@ -337,14 +369,15 @@ async function runProcess(
   });
 }
 
-async function runJsonScript(
+async function runPythonJsonScript(
+  scriptName: string,
   args: string[],
   options: CommandOptions & { input?: string } = {}
 ): Promise<JsonRecord> {
   try {
     const { stdout } = await runProcess(
       "python3",
-      [resolveRepoPath("scripts/manage_github_secrets.py"), ...args],
+      [resolveRepoPath(`scripts/${scriptName}`), ...args],
       options
     );
     const parsed = JSON.parse(stdout || "{}") as unknown;
@@ -367,6 +400,23 @@ async function runJsonScript(
   }
 }
 
+async function runGithubJsonScript(
+  args: string[],
+  options: CommandOptions & { input?: string } = {}
+): Promise<JsonRecord> {
+  return runPythonJsonScript("manage_github_secrets.py", args, options);
+}
+
+async function runDnsJsonScript(args: string[]): Promise<JsonRecord> {
+  const configPath = await defaultConfigPath();
+  return runPythonJsonScript("manage_dns_records.py", ["--registry", configPath, "--json", ...args], {
+    env: {
+      ...process.env,
+      REGISTRY_PATH: configPath,
+    },
+  });
+}
+
 function parseGithubSecretsDocument(payload: JsonRecord): GithubSecretsDocument {
   const repo = typeof payload.repo === "string" && payload.repo.trim() ? payload.repo.trim() : null;
   const checkoutPath =
@@ -378,20 +428,20 @@ function parseGithubSecretsDocument(payload: JsonRecord): GithubSecretsDocument 
   }
 
   const workflowFiles = Array.isArray(payload.workflowFiles)
-    ? payload.workflowFiles.filter((entry): entry is string => typeof entry === "string" && entry.trim())
+    ? payload.workflowFiles.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
     : [];
 
   const secrets = Array.isArray(payload.secrets)
     ? payload.secrets
         .map((entry) => asRecord(entry))
-        .filter((entry) => typeof entry.name === "string" && entry.name.trim())
+        .filter((entry) => typeof entry.name === "string" && Boolean(entry.name.trim()))
         .map((entry) => ({
           name: String(entry.name).trim(),
           configured: entry.configured === true,
           presentInEnvFile: entry.presentInEnvFile === true,
           requiredByWorkflows: Array.isArray(entry.requiredByWorkflows)
             ? entry.requiredByWorkflows.filter(
-                (item): item is string => typeof item === "string" && item.trim()
+                (item): item is string => typeof item === "string" && Boolean(item.trim())
               )
             : [],
         }))
@@ -512,7 +562,7 @@ export async function updateSiteDeploymentSettings(
 }
 
 export async function listGithubSecrets(siteName: string): Promise<GithubSecretsDocument> {
-  const payload = await runJsonScript(["list", "--site", readSiteName(siteName), "--json"]);
+  const payload = await runGithubJsonScript(["list", "--site", readSiteName(siteName), "--json"]);
   return parseGithubSecretsDocument(payload);
 }
 
@@ -527,7 +577,7 @@ export async function setGithubSecret(
     throw new Error("A non-empty secret value is required.");
   }
 
-  const payload = await runJsonScript(["set", trimmedName, "--site", trimmedSiteName, "--json"], {
+  const payload = await runGithubJsonScript(["set", trimmedName, "--site", trimmedSiteName, "--json"], {
     input: value,
   });
   const document = await listGithubSecrets(trimmedSiteName);
@@ -554,7 +604,7 @@ export async function deleteGithubSecret(
   const trimmedSiteName = readSiteName(siteName);
   const trimmedName = readRequiredString(name, "Secret name");
 
-  const payload = await runJsonScript(["delete", trimmedName, "--site", trimmedSiteName, "--json"]);
+  const payload = await runGithubJsonScript(["delete", trimmedName, "--site", trimmedSiteName, "--json"]);
   const document = await listGithubSecrets(trimmedSiteName);
   return {
     document,
@@ -567,6 +617,177 @@ export async function deleteGithubSecret(
         typeof payload.message === "string" && payload.message.trim()
           ? payload.message.trim()
           : `Deleted repository secret ${trimmedName}.`,
+      finishedAt: new Date().toISOString(),
+    },
+  };
+}
+
+function parseDomainRecordsDocument(payload: JsonRecord): DomainRecordsDocument {
+  const provider = typeof payload.provider === "string" && payload.provider.trim() ? payload.provider.trim() : "";
+  const zone = typeof payload.zone === "string" && payload.zone.trim() ? payload.zone.trim() : "";
+  if (!provider || !zone) {
+    throw new Error("DNS response did not include provider and zone metadata.");
+  }
+
+  const records = Array.isArray(payload.records)
+    ? payload.records
+        .map((entry) => asRecord(entry))
+        .filter((entry) => typeof entry.id === "string" && entry.id.trim())
+        .map((entry) => ({
+          id: String(entry.id).trim(),
+          type: typeof entry.type === "string" ? entry.type.trim().toUpperCase() : "",
+          name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : "@",
+          content: typeof entry.content === "string" ? entry.content.trim() : "",
+          ttl: typeof entry.ttl === "number" && Number.isFinite(entry.ttl) ? entry.ttl : 0,
+          prio: typeof entry.prio === "number" && Number.isFinite(entry.prio) ? entry.prio : null,
+        }))
+    : [];
+
+  return {
+    siteName: typeof payload.siteName === "string" && payload.siteName.trim() ? payload.siteName.trim() : null,
+    domain: typeof payload.domain === "string" && payload.domain.trim() ? payload.domain.trim() : null,
+    provider,
+    zone,
+    records,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeDomainRecordMutation(record: DomainRecordMutation, requireId: boolean): DomainDnsRecord {
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  if (requireId && !id) {
+    throw new Error("DNS record ID is required.");
+  }
+
+  const type = readRequiredString(record.type, "Record type").toUpperCase();
+  const name = readRequiredString(record.name, "Record name");
+  const content = readRequiredString(record.content, "Record content");
+  const ttl = Number(record.ttl);
+  if (!Number.isFinite(ttl) || ttl < 0) {
+    throw new Error("TTL must be zero or greater.");
+  }
+  const prio = record.prio === null || record.prio === undefined || Number.isNaN(Number(record.prio))
+    ? null
+    : Number(record.prio);
+  if (prio !== null && (!Number.isFinite(prio) || prio < 0)) {
+    throw new Error("Priority must be zero or greater.");
+  }
+
+  return {
+    id,
+    type,
+    name,
+    content,
+    ttl,
+    prio,
+  };
+}
+
+function domainRecordArgs(record: DomainDnsRecord, includeId: boolean): string[] {
+  const args = [
+    "--type",
+    record.type,
+    "--name",
+    record.name,
+    "--content",
+    record.content,
+    "--ttl",
+    String(record.ttl),
+  ];
+  if (record.prio !== null) {
+    args.push("--prio", String(record.prio));
+  }
+  if (includeId) {
+    args.unshift("--id", record.id);
+  }
+  return args;
+}
+
+export async function listDomainRecords(siteName: string): Promise<DomainRecordsDocument> {
+  const payload = await runDnsJsonScript(["list", "--site", readSiteName(siteName)]);
+  return parseDomainRecordsDocument(payload);
+}
+
+export async function createDomainRecord(
+  siteName: string,
+  mutation: DomainRecordMutation
+): Promise<{ document: DomainRecordsDocument; result: DomainRecordMutationResult }> {
+  const trimmedSiteName = readSiteName(siteName);
+  const record = normalizeDomainRecordMutation(mutation, false);
+  const payload = await runDnsJsonScript([
+    "create",
+    "--site",
+    trimmedSiteName,
+    ...domainRecordArgs(record, false),
+  ]);
+  const document = parseDomainRecordsDocument(payload);
+  return {
+    document,
+    result: {
+      action: "create",
+      siteName: document.siteName,
+      domain: document.domain,
+      provider: document.provider,
+      zone: document.zone,
+      summary:
+        typeof payload.message === "string" && payload.message.trim()
+          ? payload.message.trim()
+          : `Created ${record.type} record ${record.name}.`,
+      finishedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export async function updateDomainRecord(
+  siteName: string,
+  mutation: DomainRecordMutation
+): Promise<{ document: DomainRecordsDocument; result: DomainRecordMutationResult }> {
+  const trimmedSiteName = readSiteName(siteName);
+  const record = normalizeDomainRecordMutation(mutation, true);
+  const payload = await runDnsJsonScript([
+    "update",
+    "--site",
+    trimmedSiteName,
+    ...domainRecordArgs(record, true),
+  ]);
+  const document = parseDomainRecordsDocument(payload);
+  return {
+    document,
+    result: {
+      action: "update",
+      siteName: document.siteName,
+      domain: document.domain,
+      provider: document.provider,
+      zone: document.zone,
+      summary:
+        typeof payload.message === "string" && payload.message.trim()
+          ? payload.message.trim()
+          : `Updated ${record.type} record ${record.name}.`,
+      finishedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export async function deleteDomainRecord(
+  siteName: string,
+  id: string
+): Promise<{ document: DomainRecordsDocument; result: DomainRecordMutationResult }> {
+  const trimmedSiteName = readSiteName(siteName);
+  const trimmedId = readRequiredString(id, "Record ID");
+  const payload = await runDnsJsonScript(["delete", "--site", trimmedSiteName, "--id", trimmedId]);
+  const document = parseDomainRecordsDocument(payload);
+  return {
+    document,
+    result: {
+      action: "delete",
+      siteName: document.siteName,
+      domain: document.domain,
+      provider: document.provider,
+      zone: document.zone,
+      summary:
+        typeof payload.message === "string" && payload.message.trim()
+          ? payload.message.trim()
+          : `Deleted DNS record ${trimmedId}.`,
       finishedAt: new Date().toISOString(),
     },
   };

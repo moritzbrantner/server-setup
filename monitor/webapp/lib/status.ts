@@ -45,6 +45,8 @@ export type LoadedSite = {
   branch?: string | null;
   checkoutPath?: string | null;
   webhookRepo?: string | null;
+  dnsProvider?: string | null;
+  dnsZone?: string | null;
 };
 
 export type PushDeployReadiness = {
@@ -286,6 +288,10 @@ function mergeSiteConfig(site: JsonRecord): JsonRecord {
       ...asObject(deployConfig.nginx),
       ...asObject(site.nginx),
     },
+    dns: {
+      ...asObject(deployConfig.dns),
+      ...asObject(site.dns),
+    },
   };
 }
 
@@ -336,6 +342,7 @@ export async function loadSites(configPath?: string, stateDir?: string | null): 
       }
 
       const runtime = asObject(site.runtime);
+      const dns = asObject(site.dns);
       const runtimeMode = pickString(runtime, "mode") || "static";
       const timeoutSeconds = pickNumber(site, "timeout") ?? 5;
       const runtimePort = pickNumber(runtime, "port");
@@ -366,6 +373,8 @@ export async function loadSites(configPath?: string, stateDir?: string | null): 
         branch: pickString(site, "branch"),
         checkoutPath: pickString(site, "checkout_path"),
         webhookRepo: pickString(site, "webhook_repo"),
+        dnsProvider: pickString(dns, "provider"),
+        dnsZone: pickString(dns, "zone"),
       };
     })
   );

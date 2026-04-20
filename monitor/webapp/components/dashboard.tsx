@@ -12,6 +12,8 @@ import {
 import type {
   DashboardActionRequest,
   DashboardActionResult,
+  DomainDnsRecord,
+  DomainRecordsDocument,
   EditableConfigDocument,
   GithubSecretsDocument,
   SiteDeploymentSettings,
@@ -41,6 +43,21 @@ type GithubSecretSiteOption = {
   repoLabel: string;
 };
 
+type DomainSiteOption = {
+  siteName: string;
+  provider: string;
+  zone: string;
+};
+
+type DomainRecordDraft = {
+  id: string;
+  type: string;
+  name: string;
+  content: string;
+  ttl: string;
+  prio: string;
+};
+
 const EMPTY_NEW_SITE_DRAFT: NewSiteDraft = {
   repoUrl: "",
   branch: "",
@@ -53,6 +70,17 @@ const EMPTY_GITHUB_SECRET_DRAFT: GithubSecretDraft = {
   name: "",
   value: "",
 };
+
+const EMPTY_DOMAIN_RECORD_DRAFT: DomainRecordDraft = {
+  id: "",
+  type: "A",
+  name: "@",
+  content: "",
+  ttl: "600",
+  prio: "",
+};
+
+const DNS_RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "CAA", "SRV", "ALIAS"];
 
 function formatMetric(value: number | null, suffix = ""): string {
   if (value === null || Number.isNaN(value)) {
@@ -196,6 +224,28 @@ function deriveGithubSecretSiteOptions(snapshot: DashboardSnapshot): GithubSecre
     .sort((left, right) => left.siteName.localeCompare(right.siteName));
 }
 
+function deriveDomainSiteOptions(snapshot: DashboardSnapshot): DomainSiteOption[] {
+  return snapshot.applications
+    .filter((application) => application.dnsProvider && application.dnsZone)
+    .map((application) => ({
+      siteName: application.name,
+      provider: application.dnsProvider || "",
+      zone: application.dnsZone || "",
+    }))
+    .sort((left, right) => left.siteName.localeCompare(right.siteName));
+}
+
+function draftFromDomainRecord(record: DomainDnsRecord): DomainRecordDraft {
+  return {
+    id: record.id,
+    type: record.type || "A",
+    name: record.name || "@",
+    content: record.content,
+    ttl: String(record.ttl || 600),
+    prio: record.prio === null ? "" : String(record.prio),
+  };
+}
+
 function pushDeployTone(application: SiteCheck): string {
   return pillTone(application.pushDeploy?.status || "unknown");
 }
@@ -224,9 +274,19 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     deriveGithubSecretSiteOptions(initialSnapshot)[0]?.siteName || ""
   );
   const [githubSecretDraft, setGithubSecretDraft] = useState<GithubSecretDraft>(EMPTY_GITHUB_SECRET_DRAFT);
+  const [domainRecordsDocument, setDomainRecordsDocument] = useState<DomainRecordsDocument | null>(null);
+  const [domainRecordsMessage, setDomainRecordsMessage] = useState<string | null>(null);
+  const [domainRecordsBusy, setDomainRecordsBusy] = useState(false);
+  const [domainRecordsSiteName, setDomainRecordsSiteName] = useState<string>(
+    deriveDomainSiteOptions(initialSnapshot)[0]?.siteName || ""
+  );
+  const [domainRecordDraft, setDomainRecordDraft] = useState<DomainRecordDraft>(EMPTY_DOMAIN_RECORD_DRAFT);
   const githubSecretSiteOptions = deriveGithubSecretSiteOptions(snapshot);
   const selectedGithubSecretSite =
     githubSecretSiteOptions.find((entry) => entry.siteName === githubSecretsSiteName) || null;
+  const domainSiteOptions = deriveDomainSiteOptions(snapshot);
+  const selectedDomainSite =
+    domainSiteOptions.find((entry) => entry.siteName === domainRecordsSiteName) || null;
 
   const refreshSnapshot = useEffectEvent(async () => {
     try {
@@ -271,6 +331,7 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
         setConfigMessage(null);
         setAdminMessage(null);
         setGithubSecretsMessage(null);
+        setDomainRecordsMessage(null);
         setAdminUnlocked(true);
       });
     } catch (loadError) {
@@ -322,6 +383,45 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     }
   });
 
+  const loadDomainRecords = useEffectEvent(async (siteName: string) => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+    if (!siteName.trim()) {
+      setDomainRecordsDocument(null);
+      return;
+    }
+
+    setDomainRecordsBusy(true);
+    try {
+      const response = await fetch(`/api/domain-records?siteName=${encodeURIComponent(siteName)}`, {
+        cache: "no-store",
+        headers: adminHeaders(trimmedToken),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const document = (await response.json()) as DomainRecordsDocument;
+      startTransition(() => {
+        setDomainRecordsDocument(document);
+        setDomainRecordsMessage(null);
+        setAdminMessage(null);
+      });
+    } catch (loadError) {
+      const message =
+        loadError instanceof Error ? loadError.message : "Unable to load domain records.";
+      startTransition(() => {
+        setDomainRecordsDocument(null);
+        setDomainRecordsMessage(message);
+      });
+    } finally {
+      setDomainRecordsBusy(false);
+    }
+  });
+
   useEffect(() => {
     const storedToken = window.localStorage.getItem("status-webapp-admin-token") || "";
     if (!storedToken) {
@@ -345,6 +445,18 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
   }, [githubSecretSiteOptions, githubSecretsSiteName]);
 
   useEffect(() => {
+    if (domainSiteOptions.length === 0) {
+      setDomainRecordsSiteName("");
+      setDomainRecordsDocument(null);
+      return;
+    }
+
+    if (!domainSiteOptions.some((entry) => entry.siteName === domainRecordsSiteName)) {
+      setDomainRecordsSiteName(domainSiteOptions[0]?.siteName || "");
+    }
+  }, [domainSiteOptions, domainRecordsSiteName]);
+
+  useEffect(() => {
     const intervalId = setInterval(() => {
       void refreshSnapshot();
     }, 30000);
@@ -358,6 +470,13 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     }
     void loadGithubSecrets(githubSecretsSiteName);
   }, [adminUnlocked, githubSecretsSiteName, loadGithubSecrets]);
+
+  useEffect(() => {
+    if (!adminUnlocked || !domainRecordsSiteName) {
+      return;
+    }
+    void loadDomainRecords(domainRecordsSiteName);
+  }, [adminUnlocked, domainRecordsSiteName, loadDomainRecords]);
 
   const unlockAdminControls = useEffectEvent(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -638,6 +757,126 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     }
   });
 
+  const updateDomainRecordDraft = useEffectEvent(
+    (field: keyof DomainRecordDraft, value: string) => {
+      setDomainRecordDraft((current) => ({
+        ...current,
+        [field]: value,
+      }));
+    }
+  );
+
+  const editDomainRecord = useEffectEvent((record: DomainDnsRecord) => {
+    setDomainRecordDraft(draftFromDomainRecord(record));
+    setDomainRecordsMessage(`Editing DNS record ${record.id}.`);
+  });
+
+  const clearDomainRecordDraft = useEffectEvent(() => {
+    setDomainRecordDraft(EMPTY_DOMAIN_RECORD_DRAFT);
+    setDomainRecordsMessage(null);
+  });
+
+  const saveDomainRecord = useEffectEvent(async () => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+    if (!domainRecordsSiteName) {
+      setDomainRecordsMessage("Select a domain-managed site first.");
+      return;
+    }
+    if (!domainRecordDraft.type.trim() || !domainRecordDraft.name.trim() || !domainRecordDraft.content.trim()) {
+      setDomainRecordsMessage("Record type, name, and value are required.");
+      return;
+    }
+
+    setDomainRecordsBusy(true);
+    try {
+      const editing = Boolean(domainRecordDraft.id.trim());
+      const response = await fetch("/api/domain-records", {
+        method: editing ? "PUT" : "POST",
+        headers: adminHeaders(trimmedToken),
+        body: JSON.stringify({
+          siteName: domainRecordsSiteName,
+          id: domainRecordDraft.id,
+          type: domainRecordDraft.type,
+          name: domainRecordDraft.name,
+          content: domainRecordDraft.content,
+          ttl: Number(domainRecordDraft.ttl || 600),
+          prio: domainRecordDraft.prio.trim() ? Number(domainRecordDraft.prio) : null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const payload = (await response.json()) as {
+        document: DomainRecordsDocument;
+        result: { summary: string };
+      };
+      startTransition(() => {
+        setDomainRecordsDocument(payload.document);
+        setDomainRecordsMessage(payload.result.summary);
+        setDomainRecordDraft(EMPTY_DOMAIN_RECORD_DRAFT);
+        setAdminMessage(null);
+      });
+    } catch (saveError) {
+      const message =
+        saveError instanceof Error ? saveError.message : "Unable to save the DNS record.";
+      startTransition(() => {
+        setDomainRecordsMessage(message);
+      });
+    } finally {
+      setDomainRecordsBusy(false);
+    }
+  });
+
+  const removeDomainRecord = useEffectEvent(async (id: string) => {
+    const trimmedToken = adminToken.trim();
+    if (!trimmedToken) {
+      setAdminMessage("Admin token is missing.");
+      return;
+    }
+    if (!domainRecordsSiteName) {
+      setDomainRecordsMessage("Select a domain-managed site first.");
+      return;
+    }
+
+    setDomainRecordsBusy(true);
+    try {
+      const response = await fetch("/api/domain-records", {
+        method: "DELETE",
+        headers: adminHeaders(trimmedToken),
+        body: JSON.stringify({
+          siteName: domainRecordsSiteName,
+          id,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const payload = (await response.json()) as {
+        document: DomainRecordsDocument;
+        result: { summary: string };
+      };
+      startTransition(() => {
+        setDomainRecordsDocument(payload.document);
+        setDomainRecordsMessage(payload.result.summary);
+        setAdminMessage(null);
+      });
+    } catch (deleteError) {
+      const message =
+        deleteError instanceof Error ? deleteError.message : "Unable to delete the DNS record.";
+      startTransition(() => {
+        setDomainRecordsMessage(message);
+      });
+    } finally {
+      setDomainRecordsBusy(false);
+    }
+  });
+
   const discardConfigChanges = useEffectEvent(() => {
     if (!configDocument) {
       return;
@@ -657,6 +896,9 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
     setGithubSecretsDocument(null);
     setGithubSecretsMessage(null);
     setGithubSecretDraft(EMPTY_GITHUB_SECRET_DRAFT);
+    setDomainRecordsDocument(null);
+    setDomainRecordsMessage(null);
+    setDomainRecordDraft(EMPTY_DOMAIN_RECORD_DRAFT);
     setActionResult(null);
     setAdminMessage("Admin token cleared from this browser session.");
   });
@@ -1138,6 +1380,205 @@ export function Dashboard({ initialSnapshot, adminControlsEnabled }: DashboardPr
             ) : (
               <p className="inline-note">
                 No deployed site currently exposes checkout metadata in the active status source.
+              </p>
+            )}
+          </article>
+
+          <article className="admin-card">
+            <div className="admin-card-head">
+              <div>
+                <h3>Domain DNS</h3>
+                <p>Manage Namecheap or Porkbun DNS records for sites with a `dns` config block.</p>
+              </div>
+            </div>
+            {domainSiteOptions.length > 0 ? (
+              <>
+                <div className="token-form">
+                  <label className="token-field">
+                    <span>Managed site</span>
+                    <select
+                      disabled={!adminUnlocked || domainRecordsBusy}
+                      onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                        setDomainRecordsSiteName(event.target.value);
+                        setDomainRecordsDocument(null);
+                        setDomainRecordsMessage(null);
+                        setDomainRecordDraft(EMPTY_DOMAIN_RECORD_DRAFT);
+                      }}
+                      value={domainRecordsSiteName}
+                    >
+                      {domainSiteOptions.map((option) => (
+                        <option key={option.siteName} value={option.siteName}>
+                          {option.siteName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="config-meta">
+                    <span>Provider</span>
+                    <strong>{domainRecordsDocument?.provider || selectedDomainSite?.provider || "n/a"}</strong>
+                  </div>
+                  <div className="config-meta">
+                    <span>Zone</span>
+                    <strong>{domainRecordsDocument?.zone || selectedDomainSite?.zone || "Loading..."}</strong>
+                  </div>
+                  <label className="token-field">
+                    <span>Record type</span>
+                    <select
+                      disabled={!adminUnlocked || domainRecordsBusy}
+                      onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                        updateDomainRecordDraft("type", event.target.value)
+                      }
+                      value={domainRecordDraft.type}
+                    >
+                      {DNS_RECORD_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="token-field">
+                    <span>Host</span>
+                    <input
+                      disabled={!adminUnlocked || domainRecordsBusy}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        updateDomainRecordDraft("name", event.target.value)
+                      }
+                      placeholder="@"
+                      type="text"
+                      value={domainRecordDraft.name}
+                    />
+                  </label>
+                  <label className="token-field">
+                    <span>Value</span>
+                    <input
+                      disabled={!adminUnlocked || domainRecordsBusy}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        updateDomainRecordDraft("content", event.target.value)
+                      }
+                      placeholder="203.0.113.10"
+                      type="text"
+                      value={domainRecordDraft.content}
+                    />
+                  </label>
+                  <label className="token-field">
+                    <span>TTL</span>
+                    <input
+                      disabled={!adminUnlocked || domainRecordsBusy}
+                      min="0"
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        updateDomainRecordDraft("ttl", event.target.value)
+                      }
+                      type="number"
+                      value={domainRecordDraft.ttl}
+                    />
+                  </label>
+                  <label className="token-field">
+                    <span>Priority</span>
+                    <input
+                      disabled={!adminUnlocked || domainRecordsBusy}
+                      min="0"
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        updateDomainRecordDraft("prio", event.target.value)
+                      }
+                      placeholder="MX/SRV only"
+                      type="number"
+                      value={domainRecordDraft.prio}
+                    />
+                  </label>
+                  <div className="button-row">
+                    <button
+                      className="primary-button"
+                      disabled={
+                        !adminUnlocked ||
+                        domainRecordsBusy ||
+                        !domainRecordsSiteName ||
+                        !domainRecordDraft.type.trim() ||
+                        !domainRecordDraft.name.trim() ||
+                        !domainRecordDraft.content.trim()
+                      }
+                      onClick={() => void saveDomainRecord()}
+                      type="button"
+                    >
+                      {domainRecordsBusy
+                        ? "Saving..."
+                        : domainRecordDraft.id
+                          ? "Update record"
+                          : "Create record"}
+                    </button>
+                    <button
+                      className="ghost-button"
+                      disabled={!adminUnlocked || domainRecordsBusy || !domainRecordsSiteName}
+                      onClick={() => void loadDomainRecords(domainRecordsSiteName)}
+                      type="button"
+                    >
+                      {domainRecordsBusy ? "Refreshing..." : "Refresh records"}
+                    </button>
+                    <button
+                      className="ghost-button"
+                      disabled={!adminUnlocked || domainRecordsBusy}
+                      onClick={() => void clearDomainRecordDraft()}
+                      type="button"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <p className="inline-note">
+                  Namecheap changes rewrite the provider host list after preserving records that are not edited here.
+                </p>
+                {domainRecordsMessage ? <p className="inline-note">{domainRecordsMessage}</p> : null}
+                <div className="alert-list">
+                  {domainRecordsDocument?.records.length ? (
+                    domainRecordsDocument.records.map((record) => (
+                      <article className="alert-card alert-ok" key={`${domainRecordsDocument.zone}-${record.id}`}>
+                        <div className="alert-head">
+                          <div>
+                            <h3>
+                              {record.type} {record.name}
+                            </h3>
+                            <p>
+                              {record.content} · TTL {record.ttl}
+                              {record.prio !== null ? ` · priority ${record.prio}` : ""}
+                            </p>
+                          </div>
+                          <div className="button-row">
+                            <button
+                              className="ghost-button"
+                              disabled={!adminUnlocked || domainRecordsBusy}
+                              onClick={() => void editDomainRecord(record)}
+                              type="button"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="ghost-button"
+                              disabled={!adminUnlocked || domainRecordsBusy}
+                              onClick={() => void removeDomainRecord(record.id)}
+                              type="button"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))
+                  ) : (
+                    <article className="alert-card alert-ok">
+                      <div className="alert-head">
+                        <div>
+                          <h3>No DNS records loaded</h3>
+                          <p>Unlock admin controls and refresh records for the selected domain.</p>
+                        </div>
+                        <mark className={pillTone("unknown")}>empty</mark>
+                      </div>
+                    </article>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="inline-note">
+                No deployed site currently defines `dns.provider` and `dns.zone` in the active status source.
               </p>
             )}
           </article>

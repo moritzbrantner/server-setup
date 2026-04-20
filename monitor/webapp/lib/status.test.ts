@@ -137,6 +137,10 @@ test("loadSites unwraps deploy registry entries", async () => {
           service: {
             name: "registry-app.service",
           },
+          dns: {
+            provider: "porkbun",
+            zone: "example.com",
+          },
         },
       },
     ]),
@@ -151,6 +155,8 @@ test("loadSites unwraps deploy registry entries", async () => {
   assert.equal(sites[0]?.serviceName, "registry-app.service");
   assert.equal(sites[0]?.repoUrl, "https://github.com/example/registry-app.git");
   assert.equal(sites[0]?.webhookRepo, null);
+  assert.equal(sites[0]?.dnsProvider, "porkbun");
+  assert.equal(sites[0]?.dnsZone, "example.com");
 });
 
 test("dashboard snapshot returns setup categories and site alerts", async () => {

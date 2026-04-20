@@ -17,6 +17,8 @@ test_render_status_webapp_env_uses_port_4000() {
   grep -Fq 'STATUS_WEBAPP_HOST=0.0.0.0' <<<"$env_body"
   grep -Fq 'STATUS_WEBAPP_PORT=4000' <<<"$env_body"
   grep -Fq 'STATUS_WEBAPP_ADMIN_TOKEN=' <<<"$env_body"
+  grep -Fq 'PORKBUN_API_KEY=' <<<"$env_body"
+  grep -Fq 'NAMECHEAP_CLIENT_IP=' <<<"$env_body"
 }
 
 test_render_status_webapp_service_restarts_on_failure() {

@@ -124,8 +124,42 @@ Supported top-level keys:
 - `runtime`
 - `service`
 - `nginx`
+- `dns`
 
 Legacy top-level shorthand like `build`, `command`, `port`, `www_redirect`, and infrastructure keys like `repo`, `branch`, or `workdir` are rejected.
+
+Optional DNS provider configuration enables domain management in the authenticated status webapp:
+
+```json
+{
+  "name": "api",
+  "domain": "api.example.com",
+  "build_output": ".",
+  "dns": {
+    "provider": "porkbun",
+    "zone": "example.com"
+  }
+}
+```
+
+Supported `dns.provider` values are `porkbun` and `namecheap`. Credentials stay out of `server.conf`; set them in the status webapp environment file (`/etc/default/server-setup-status-webapp`) and restart `server-setup-status-webapp.service`.
+
+Porkbun:
+
+```bash
+PORKBUN_API_KEY=...
+PORKBUN_SECRET_API_KEY=...
+```
+
+Namecheap:
+
+```bash
+NAMECHEAP_API_USER=...
+NAMECHEAP_API_KEY=...
+NAMECHEAP_USERNAME=...       # optional, defaults to NAMECHEAP_API_USER
+NAMECHEAP_CLIENT_IP=...      # required by Namecheap API access
+NAMECHEAP_SANDBOX=false      # optional
+```
 
 ## Operate the stack
 

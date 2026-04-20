@@ -22,6 +22,7 @@ SUPPORTED_ROOT_KEYS = {
     "runtime",
     "service",
     "nginx",
+    "dns",
 }
 UNSUPPORTED_ROOT_KEYS = {
     "repo",
@@ -75,6 +76,7 @@ SUPPORTED_RUNTIME_KEYS = {
 }
 SUPPORTED_SERVICE_KEYS = {"name"}
 SUPPORTED_NGINX_KEYS = {"www_redirect", "tls_hostnames"}
+SUPPORTED_DNS_KEYS = {"provider", "zone"}
 
 
 def _require_object(parent: dict, key: str, conf_path: Path) -> dict:
@@ -302,9 +304,11 @@ def normalize_server_conf(checkout_path: str | Path) -> dict:
     runtime = _require_object(conf, "runtime", conf_path)
     service = _require_object(conf, "service", conf_path)
     nginx = _require_object(conf, "nginx", conf_path)
+    dns = _require_object(conf, "dns", conf_path)
     _validate_allowed_keys(conf_path, "deploy_hooks", deploy_hooks, SUPPORTED_DEPLOY_HOOK_KEYS)
     _validate_allowed_keys(conf_path, "service", service, SUPPORTED_SERVICE_KEYS)
     _validate_allowed_keys(conf_path, "nginx", nginx, SUPPORTED_NGINX_KEYS)
+    _validate_allowed_keys(conf_path, "dns", dns, SUPPORTED_DNS_KEYS)
 
     name = _require_string(conf.get("name"), "name", conf_path)
     domain = _require_string(conf.get("domain"), "domain", conf_path)
@@ -332,6 +336,21 @@ def normalize_server_conf(checkout_path: str | Path) -> dict:
             f"Validation error in {conf_path}: nginx.tls_hostnames must be a list of non-empty strings"
         )
 
+    normalized_dns = None
+    if dns:
+        provider = dns.get("provider")
+        if provider not in {"namecheap", "porkbun"}:
+            raise ValidationError(
+                f"Validation error in {conf_path}: dns.provider must be 'namecheap' or 'porkbun'"
+            )
+        zone = dns.get("zone", domain)
+        if not isinstance(zone, str) or not zone.strip():
+            raise ValidationError(f"Validation error in {conf_path}: dns.zone must be a non-empty string")
+        normalized_dns = {
+            "provider": provider,
+            "zone": zone.strip().lower(),
+        }
+
     normalized = {
         "name": name,
         "domain": domain,
@@ -348,6 +367,7 @@ def normalize_server_conf(checkout_path: str | Path) -> dict:
             "www_redirect": www_redirect,
             "tls_hostnames": [item.strip() for item in tls_hostnames],
         },
+        "dns": normalized_dns,
         "source_server_conf": str(conf_path.resolve()),
     }
     return normalized

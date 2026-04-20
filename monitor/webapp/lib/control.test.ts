@@ -15,12 +15,16 @@ import {
   requestHasAdminAccess,
 } from "./auth";
 import {
+  createDomainRecord,
+  deleteDomainRecord,
   deleteGithubSecret,
   listGithubSecrets,
+  listDomainRecords,
   readEditableConfig,
   runDashboardAction,
   saveEditableConfig,
   setGithubSecret,
+  updateDomainRecord,
   updateSiteDeploymentSettings,
 } from "./control";
 
@@ -598,4 +602,109 @@ exit 1
   assert.match(loggedCommand, /manage_github_secrets\.py set API_KEY --site app --json/);
   assert.match(loggedCommand, /manage_github_secrets\.py delete API_KEY --site app --json/);
   assert.match(loggedCommand, /manage_github_secrets\.py list --site app --json/);
+});
+
+test("domain DNS helpers call manage_dns_records for a configured site", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "status-webapp-control-"));
+  const rootDir = path.join(tmpDir, "root");
+  const scriptsDir = path.join(rootDir, "scripts");
+  const binDir = path.join(tmpDir, "bin");
+  const logsDir = path.join(tmpDir, "logs");
+  const configPath = path.join(rootDir, "deploy", "registry.json");
+
+  await mkdir(scriptsDir, { recursive: true });
+  await mkdir(binDir);
+  await mkdir(logsDir);
+  await mkdir(path.dirname(configPath), { recursive: true });
+  await writeFile(
+    configPath,
+    JSON.stringify([
+      {
+        name: "app",
+        domain: "app.example.com",
+        deploy_config: {
+          name: "app",
+          domain: "app.example.com",
+          dns: {
+            provider: "porkbun",
+            zone: "example.com",
+          },
+        },
+      },
+    ]),
+    "utf-8"
+  );
+  await writeFile(path.join(scriptsDir, "manage_dns_records.py"), "print('stub')\n", "utf-8");
+  await writeExecutable(
+    path.join(binDir, "python3"),
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${logsDir}/python3.log"
+case "$5" in
+  list)
+    cat <<'JSON'
+{"action":"list","siteName":"app","domain":"app.example.com","provider":"porkbun","zone":"example.com","records":[{"id":"1","type":"A","name":"app","content":"203.0.113.10","ttl":600,"prio":null}]}
+JSON
+    ;;
+  create)
+    cat <<'JSON'
+{"action":"create","message":"Created A record app in example.com.","siteName":"app","domain":"app.example.com","provider":"porkbun","zone":"example.com","records":[{"id":"1","type":"A","name":"app","content":"203.0.113.10","ttl":600,"prio":null}]}
+JSON
+    ;;
+  update)
+    cat <<'JSON'
+{"action":"update","message":"Updated A record app in example.com.","siteName":"app","domain":"app.example.com","provider":"porkbun","zone":"example.com","records":[{"id":"1","type":"A","name":"app","content":"203.0.113.11","ttl":600,"prio":null}]}
+JSON
+    ;;
+  delete)
+    cat <<'JSON'
+{"action":"delete","message":"Deleted DNS record 1 from example.com.","siteName":"app","domain":"app.example.com","provider":"porkbun","zone":"example.com","records":[]}
+JSON
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`
+  );
+
+  await withEnv(
+    {
+      SERVER_SETUP_ROOT: rootDir,
+      STATUS_CONFIG_PATH: configPath,
+      PATH: `${binDir}:${process.env.PATH || ""}`,
+    },
+    async () => {
+      const listed = await listDomainRecords("app");
+      assert.equal(listed.provider, "porkbun");
+      assert.equal(listed.records[0]?.content, "203.0.113.10");
+
+      const created = await createDomainRecord("app", {
+        type: "A",
+        name: "app",
+        content: "203.0.113.10",
+        ttl: 600,
+        prio: null,
+      });
+      assert.equal(created.result.action, "create");
+
+      const updated = await updateDomainRecord("app", {
+        id: "1",
+        type: "A",
+        name: "app",
+        content: "203.0.113.11",
+        ttl: 600,
+        prio: null,
+      });
+      assert.equal(updated.document.records[0]?.content, "203.0.113.11");
+
+      const deleted = await deleteDomainRecord("app", "1");
+      assert.equal(deleted.document.records.length, 0);
+    }
+  );
+
+  const loggedCommand = await readFile(path.join(logsDir, "python3.log"), "utf-8");
+  assert.match(loggedCommand, /manage_dns_records\.py --registry .* --json list --site app/);
+  assert.match(loggedCommand, /manage_dns_records\.py --registry .* --json create --site app --type A --name app --content 203\.0\.113\.10 --ttl 600/);
+  assert.match(loggedCommand, /manage_dns_records\.py --registry .* --json update --site app --id 1 --type A --name app --content 203\.0\.113\.11 --ttl 600/);
+  assert.match(loggedCommand, /manage_dns_records\.py --registry .* --json delete --site app --id 1/);
 });

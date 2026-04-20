@@ -96,6 +96,49 @@ class ServerConfContractTests(unittest.TestCase):
         self.assertEqual(normalized["runtime"]["command"], "PORT=4001 npm run start")
         self.assertEqual(normalized["runtime"]["port"], 4001)
 
+    def test_normalize_accepts_dns_provider_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conf_path = pathlib.Path(tmp) / "server.conf"
+            conf_path.write_text(
+                json.dumps(
+                    {
+                        "name": "api",
+                        "domain": "api.example.com",
+                        "build_output": ".",
+                        "dns": {
+                            "provider": "porkbun",
+                            "zone": "example.com",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            normalized = self.module.normalize_server_conf(tmp)
+
+        self.assertEqual(normalized["dns"], {"provider": "porkbun", "zone": "example.com"})
+
+    def test_normalize_rejects_unknown_dns_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conf_path = pathlib.Path(tmp) / "server.conf"
+            conf_path.write_text(
+                json.dumps(
+                    {
+                        "name": "api",
+                        "domain": "api.example.com",
+                        "build_output": ".",
+                        "dns": {
+                            "provider": "unknown",
+                            "zone": "example.com",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(self.module.ValidationError, "dns.provider"):
+                self.module.normalize_server_conf(tmp)
+
     def test_normalize_rejects_legacy_top_level_shorthand(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             conf_path = pathlib.Path(tmp) / "server.conf"
