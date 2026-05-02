@@ -330,7 +330,7 @@ class NamecheapClient:
         records: list[JsonRecord] = []
         index = 1
         for element in root.iter():
-            if not element.tag.endswith("Host"):
+            if not element.tag.lower().endswith("host"):
                 continue
             attrs: JsonRecord = dict(element.attrib)
             records.append(self.normalized_host(index, attrs))

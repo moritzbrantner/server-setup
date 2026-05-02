@@ -7,6 +7,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from argparse import Namespace
 from unittest import mock
 
@@ -97,6 +98,28 @@ class ManageDnsRecordsTests(unittest.TestCase):
 
         self.assertEqual(set_calls[0][0]["content"], "203.0.113.11")
         self.assertEqual(set_calls[0][1], existing_records[1])
+
+    def test_namecheap_list_records_accepts_lowercase_host_elements(self) -> None:
+        target = self.module.DomainTarget("app", "app.example.com", "namecheap", "example.com")
+        client = self.module.NamecheapClient.__new__(self.module.NamecheapClient)
+        root = ET.fromstring(
+            """
+            <ApiResponse>
+              <CommandResponse>
+                <DomainDNSGetHostsResult Domain="example.com">
+                  <host HostId="111" Name="@" Type="A" Address="203.0.113.10" TTL="300" />
+                </DomainDNSGetHostsResult>
+              </CommandResponse>
+            </ApiResponse>
+            """
+        )
+        client.request = lambda *_args, **_kwargs: root
+
+        records = client.list_records(target)
+
+        self.assertEqual(records[0]["id"], "111")
+        self.assertEqual(records[0]["name"], "@")
+        self.assertEqual(records[0]["content"], "203.0.113.10")
 
     def test_namecheap_create_dry_run_does_not_call_set_hosts(self) -> None:
         target = self.module.DomainTarget("app", "app.example.com", "namecheap", "example.com")
