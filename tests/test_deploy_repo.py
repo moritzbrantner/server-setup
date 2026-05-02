@@ -65,6 +65,15 @@ class DeployRepoTests(unittest.TestCase):
         server_conf_mock.assert_called_once_with(tmp)
         dotfiles_mock.assert_called_once()
 
+    def test_prepare_repository_config_can_skip_example_dotfile_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(self.module, "ensure_server_conf") as server_conf_mock:
+                with patch.object(self.module, "ensure_example_dotfiles") as dotfiles_mock:
+                    self.module.prepare_repository_config(tmp, skip_example_dotfiles=True)
+
+        server_conf_mock.assert_called_once_with(tmp)
+        dotfiles_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

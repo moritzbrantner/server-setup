@@ -22,6 +22,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--email", default="")
     parser.add_argument("--skip-github-hook", action="store_true")
     parser.add_argument("--skip-tls", action="store_true", help="Skip DNS verification and Let's Encrypt setup.")
+    parser.add_argument(
+        "--skip-example-dotfiles",
+        action="store_true",
+        help="Do not create missing dotfiles from *.example templates before deployment.",
+    )
     return parser.parse_args()
 
 
@@ -43,8 +48,10 @@ def ensure_server_conf(checkout_path: str | Path) -> Path:
     )
 
 
-def prepare_repository_config(checkout_path: str | Path) -> None:
+def prepare_repository_config(checkout_path: str | Path, *, skip_example_dotfiles: bool = False) -> None:
     ensure_server_conf(checkout_path)
+    if skip_example_dotfiles:
+        return
     ensure_example_dotfiles(
         checkout_path,
         prompt_text_fn=prompt_text,
@@ -74,7 +81,7 @@ def main() -> None:
     print("[2/6] Cloning or updating repository checkout")
     branch = clone_or_update_checkout(args.repo_url, dest, args.branch)
     print("[3/6] Preparing repository config files")
-    prepare_repository_config(dest)
+    prepare_repository_config(dest, skip_example_dotfiles=args.skip_example_dotfiles)
 
     print("[4/6] Validating server.conf and updating registry")
     entry = build_registry_entry(

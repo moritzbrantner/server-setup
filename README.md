@@ -58,7 +58,8 @@ sudo python3 ./scripts/deploy_repo.py \
   --dest /srv/apps/your-app \
   --branch main \
   --email ops@example.com \
-  --skip-github-hook
+  --skip-github-hook \
+  --skip-example-dotfiles
 ```
 
 What it does:
@@ -70,6 +71,8 @@ What it does:
 - writes or updates the nginx site
 - verifies DNS and requests/renews Let’s Encrypt
 - configures the webhook receiver and, when possible, the GitHub webhook
+
+Use `--skip-example-dotfiles` for repositories whose `server.conf` and deploy hooks manage production runtime configuration directly. Without it, noninteractive deploys stop when a checked-out repository contains missing `*.example` dotfile targets that would normally be filled in through prompts.
 
 If automatic GitHub webhook creation is not possible, the script prints the exact payload URL and secret to configure manually.
 
