@@ -57,3 +57,9 @@ volumes:
   postgres_test_data:
   monitor_webapp_node_modules:
   monitor_webapp_build:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.90.23.0/24
