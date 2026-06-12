@@ -72,8 +72,8 @@ def main() -> None:
     run_checked(["systemctl", "enable", "certbot.timer"], allow_fail=True)
     run_checked(["systemctl", "start", "certbot.timer"], allow_fail=True)
 
-    print("[4/5] Checking renewal configuration...")
-    run_checked(["certbot", "renew", "--dry-run"])
+    print("[4/5] Checking certificate configuration...")
+    run_checked(["certbot", "certificates", "--cert-name", args.domain])
 
     print("[5/5] Reloading Nginx...")
     run_checked(["nginx", "-t"])
