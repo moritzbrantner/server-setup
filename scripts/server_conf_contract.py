@@ -19,6 +19,7 @@ SUPPORTED_ROOT_KEYS = {
     "build_output",
     "web_root",
     "deploy_hooks",
+    "deployment_policy",
     "runtime",
     "service",
     "nginx",
