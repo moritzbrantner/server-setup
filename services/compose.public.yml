@@ -8,7 +8,7 @@ services:
       - "traefik.docker.network=dokploy-network"
       - "traefik.http.routers.server-setup-status.rule=Host(`${UPTIME_KUMA_HOST}`)"
       - "traefik.http.routers.server-setup-status.entrypoints=websecure"
-      - "traefik.http.routers.server-setup-status.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.server-setup-status.tls.certResolver=letsencrypt"
       - "traefik.http.services.server-setup-status.loadbalancer.server.port=3001"
 
   beszel:
@@ -20,7 +20,7 @@ services:
       - "traefik.docker.network=dokploy-network"
       - "traefik.http.routers.server-setup-metrics.rule=Host(`${BESZEL_HOST}`)"
       - "traefik.http.routers.server-setup-metrics.entrypoints=websecure"
-      - "traefik.http.routers.server-setup-metrics.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.server-setup-metrics.tls.certResolver=letsencrypt"
       - "traefik.http.services.server-setup-metrics.loadbalancer.server.port=8090"
 
 networks:
