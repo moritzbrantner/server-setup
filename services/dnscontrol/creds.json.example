@@ -1,4 +1,7 @@
 {
+  "none": {
+    "TYPE": "NONE"
+  },
   "porkbun": {
     "TYPE": "PORKBUN",
     "api_key": "replace-me",
