@@ -1,8 +1,8 @@
 # Installing And Testing `server-setup`
 
-This file covers development and verification of `server-setup` itself. For the user-facing setup flow, use [`README.md`](/home/moenarch/moritzbrantner/server-setup/README.md).
+This file covers development and verification of `server-setup` itself. For the user-facing installation and architecture, use [`README.md`](README.md).
 
-## Local install
+## Local checkout
 
 ```bash
 git clone <your-server-setup-repo-url>
@@ -23,13 +23,19 @@ Equivalent Make target:
 make test
 ```
 
-That suite includes:
-- shell linting with ShellCheck
-- Python linting with Ruff when it is installed
-- status webapp TypeScript typechecking
-- shell tests for the deployment helpers and systemd assets
-- Python unit tests for the deployment engine and contracts
-- the `monitor/webapp` TypeScript test suite via `npm ci && npm test`
+The suite includes:
+
+- ShellCheck and Python linting,
+- `setup.sh` syntax/help validation,
+- Docker Compose model validation for `services/compose.yml` and the optional Dokploy/Traefik overlay,
+- shell and Python tests for the retained legacy deployment helpers,
+- status webapp typechecking and tests for the retained legacy dashboard.
+
+Run only the connected-services validation:
+
+```bash
+bash ./tests/test_service_stack.sh
+```
 
 Run only Python tests:
 
@@ -37,39 +43,36 @@ Run only Python tests:
 ./tests/run-python-tests.sh
 ```
 
-Run only the status webapp tests:
+Run only the legacy status webapp tests:
 
 ```bash
 ./tests/test_status_webapp_frontend.sh
 ```
 
-Equivalent Make target:
-
-```bash
-make webapp-test
-```
-
-Run lint and static checks only:
+Run lint/static checks only:
 
 ```bash
 ./tests/run-lint.sh
 ```
 
-Equivalent Make target:
+## Service-stack validation
 
-```bash
-make lint
-```
+`tests/test_service_stack.sh` does not install Dokploy or start production containers. It validates the Compose models and checks the installer contract without mutating the machine.
 
-Run the self-check wrapper:
+The canonical host setup itself is intentionally tested on a disposable Ubuntu/Debian server because Dokploy's installation manages Docker Swarm and binds ports 80, 443, and 3000.
 
-```bash
-python3 ./scripts/run_self_checks.py
-```
+Before a real-host integration test, review the safety conditions documented in the README:
 
-## Docker sandbox
+- do not run the upstream Dokploy installer over an unrelated active Swarm,
+- ports 80/443/3000 must be available,
+- `--replace-legacy` is an explicit traffic cut-over and does not migrate applications,
+- Docker-published ports require Docker-aware or provider-level firewalling.
 
-Build the sandbox image:
+## Legacy Docker sandbox
+
+The root `Dockerfile` and root `compose.yml` exercise the retained Python/systemd/nginx implementation. They are a compatibility sandbox, not the production service architecture.
+
+Build the legacy sandbox image:
 
 ```bash
 docker build -t server-setup-sandbox .
@@ -86,36 +89,14 @@ docker run --privileged --cgroupns=host \
   -d server-setup-sandbox
 ```
 
-Open a shell:
-
-```bash
-docker exec -it server-setup-sandbox bash
-cd /opt/server-setup
-```
-
-Useful sandbox commands:
-
-```bash
-python3 ./scripts/prepare_server.py --email admin@example.com --skip-docker
-python3 ./scripts/deploy_repo.py --repo-url /srv/apps/simple-site --dest /srv/apps/simple-site --email admin@example.com --skip-github-hook --skip-tls
-python3 ./scripts/manage_services.py
-```
-
-Optional pre-release integration check:
+Optional compatibility integration check:
 
 ```bash
 docker build -t server-setup-test .
 IMAGE_NAME=server-setup-test ./tests/test_docker_sandbox.sh
 ```
 
-Equivalent Make target after setting `IMAGE_NAME`:
-
-```bash
-make docker-sandbox-test
-```
-
-This check is intentionally outside `./tests/run-tests.sh` because it needs privileged Docker and systemd-in-container support.
-It is the recommended pre-release integration path and exercises static deployment, service deployment, nginx routing, and the status webapp nginx proxy when practical in the sandbox.
+This test remains outside the default suite because it needs privileged Docker and systemd-in-container support.
 
 ## Release checklist
 
@@ -123,25 +104,22 @@ Before merging or tagging a release:
 
 1. Run `make lint`.
 2. Run `make test`.
-3. Confirm `git status --short` contains only intentional tracked changes.
-4. If Docker is available, run the optional Docker sandbox integration check.
-5. Review `CHANGELOG.md` and move relevant `Unreleased` notes into the release entry.
+3. Confirm the service-stack Compose validation passes.
+4. Confirm `git status --short` contains only intentional tracked changes.
+5. If legacy compatibility changed, run the optional privileged Docker sandbox check.
 6. Confirm no generated host state, secrets, `.env` files, `node_modules`, `.next`, or `tsconfig.tsbuildinfo` files are staged.
 
-## Examples
+## Architecture boundary
 
-The example repositories under `examples/repositories/` use the current nested `server.conf` contract:
-- `simple-site`
-- `rest-api`
-- `complex-site`
-- `marketing-site`
+New functionality should go to the service that owns it rather than extending the retained deployment engine:
 
-## Canonical Development Notes
+- Dokploy: deploy/build/runtime/domain/TLS/webhook/log/rollback functionality,
+- Uptime Kuma: uptime/status functionality,
+- Beszel: host/container telemetry,
+- DNSControl: DNS-provider integration,
+- `harden_server.py`: small host-native baseline only.
 
-- The supported dashboard is `monitor/webapp`; the legacy Python dashboard has been retired.
-- `deploy/registry.json` is generated host-local runtime state and should not be committed.
-- `STATUS_CONFIG_PATH` should point at the active `deploy/registry.json` when testing dashboard admin actions against a non-default registry path.
-- `scripts/migrate_registry.py` exists only to migrate older `deploy/sites.json` installations.
+The older `server.conf`, registry, webhook receiver, nginx installer, and custom status webapp are compatibility/migration surfaces.
 
 ## CI
 
