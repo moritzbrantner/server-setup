@@ -343,6 +343,7 @@ install_dokploy() {
 
   local installer
   installer="$(mktemp)"
+  trap 'rm -f "$installer"' EXIT
   if ! curl -fsSL "$DOKPLOY_INSTALL_URL" -o "$installer"; then
     rm -f "$installer"
     die "Unable to download the pinned Dokploy installer from $DOKPLOY_INSTALL_URL; the legacy edge was not changed."
@@ -367,6 +368,7 @@ install_dokploy() {
     die "Dokploy installation failed. Restarting the previously active legacy units was attempted; review any rollback errors above."
   fi
   rm -f "$installer"
+  trap - EXIT
 
   if ! wait_for_dokploy_ready; then
     if [[ "$REPLACE_LEGACY" -eq 1 ]]; then
