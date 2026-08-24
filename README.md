@@ -1,285 +1,194 @@
 # server-setup
 
-`server-setup` supports one deployment workflow for served repositories:
+`server-setup` is an installer and integration layer for a small self-hosted server stack. New installations compose established services instead of implementing a deployment platform inside this repository.
 
-1. Prepare the server once.
-2. Deploy each repository with `deploy-repo`.
+## Canonical architecture
 
-Repositories that should be served must contain a valid root `server.conf`.
+| Responsibility | Service |
+| --- | --- |
+| Git deployments, builds, environment variables, logs, deployment history, auto-deploy webhooks, rollback | Dokploy |
+| Reverse proxy, domains, HTTPS certificates | Dokploy-managed Traefik |
+| Uptime checks and public status pages | Uptime Kuma |
+| Host and container telemetry | Beszel |
+| Declarative Porkbun / Namecheap DNS | DNSControl |
+| UFW, fail2ban, unattended upgrades, optional SSH hardening | host-native `scripts/harden_server.py` |
 
-Generated state lives on the target host:
-- `deploy/registry.json` stores the local deployment registry for that host
-- `/var/lib/server-setup/state/*.json` stores per-site deploy/runtime status
+The repository should own only the glue between those components: installation, safe defaults, configuration examples, validation, and migration from the older implementation.
 
-The committed [`deploy/registry.example.json`](deploy/registry.example.json) file is only a shape example.
+```text
+                         Git repositories
+                               |
+                               v
+                       +----------------+
+                       |    Dokploy     |
+                       | deploy / env / |
+                       | logs / rollback|
+                       +-------+--------+
+                               |
+                    +----------+-----------+
+                    | Traefik + Let's Encrypt |
+                    +----------+-----------+
+                               |
+                         applications
 
-## Prepare the server
+          +----------------+       +----------------+
+          |  Uptime Kuma   |       |     Beszel     |
+          | checks/status  |       | host/containers|
+          +----------------+       +----------------+
+
+                         DNSControl
+                    Porkbun / Namecheap
+```
+
+## Install
+
+On a fresh Ubuntu/Debian server:
 
 ```bash
-sudo python3 ./scripts/prepare_server.py \
-  --email ops@example.com \
-  --skip-docker \
-  --with-status-webapp
+sudo bash ./setup.sh
 ```
 
-What it does:
-- installs baseline packages and developer tools
-- installs, enables, and starts `nginx`
-- optionally applies unattended-upgrades/UFW/fail2ban hardening
-- installs the webhook receiver service
-- stores `DEFAULT_TLS_EMAIL` in `/etc/default/site-automation`
-- optionally installs the status webapp
+The installer:
 
-`prepare_server.py` leaves SSH untouched by default. If you explicitly want it to manage `sshd`, add `--with-ssh-hardening`.
+1. installs a minimal host baseline (`curl`, `git`, `jq`, Python, networking tools),
+2. installs Dokploy with its upstream stable installer when it is not already present,
+3. creates `services/.env` from the committed example,
+4. starts Uptime Kuma and the Beszel hub with Docker Compose,
+5. pulls DNSControl as the DNS administration tool,
+6. applies the existing host-native UFW/fail2ban/unattended-upgrades hardening.
 
-The Next.js status webapp is the supported dashboard for this repository.
-By default, `prepare_server.py --with-status-webapp` installs a systemd service on port `4000` and an nginx proxy at `http://monitor.localhost/` when that name resolves to the server.
-For a different dashboard host, run `scripts/setup_status_webapp.py --server-name status.example.com`; use `--skip-nginx` only when another reverse proxy owns the route.
-
-If you want to use its admin controls:
-1. Set `STATUS_WEBAPP_ADMIN_TOKEN` in `/etc/default/server-setup-status-webapp`.
-2. Restart `server-setup-status-webapp.service`.
-3. Send the token in the `x-status-admin-token` header when calling admin APIs.
-
-`--email` is required the first time you run it. Later runs can reuse the stored default.
-
-## Deploy a repository
+The Uptime Kuma and Beszel ports bind to `127.0.0.1` by default. Dokploy owns ports 80/443 for application traffic. The hardening script intentionally does not open Dokploy's port 3000, so initial administration can use an SSH tunnel:
 
 ```bash
-sudo python3 ./scripts/deploy_repo.py \
-  --repo-url git@github.com:your-org/your-app.git
+ssh -L 3000:127.0.0.1:3000 user@server
 ```
 
-Optional:
+Then open `http://127.0.0.1:3000` locally.
+
+### Installer options
+
+```text
+--skip-dokploy           use an already-installed Dokploy/Docker control plane
+--skip-observability     do not start Uptime Kuma or Beszel
+--skip-hardening         do not change UFW/fail2ban/unattended-upgrades
+--replace-legacy         stop legacy nginx/webhook/status units if they block Dokploy
+--public-observability   expose Uptime Kuma and Beszel through Dokploy Traefik
+--with-beszel-agent      start the local Beszel agent after KEY/TOKEN are configured
+--with-ssh-hardening     explicitly opt in to SSH hardening
+--dry-run                print mutating commands without executing them
+```
+
+`--replace-legacy` is a cut-over switch, not an application migration command. It can interrupt traffic because the old nginx edge is stopped to free ports 80/443. Recreate or migrate the applications in Dokploy before relying on the new edge for production traffic.
+
+The installer refuses to run Dokploy's standard installer over an unrelated active Docker Swarm. In that case, install Dokploy into the existing Swarm deliberately and rerun with `--skip-dokploy`.
+
+## Operations services
+
+The production-oriented service composition is [`services/compose.yml`](services/compose.yml). The root [`compose.yml`](compose.yml) remains the existing privileged development/test sandbox and is not the production control plane.
+
+Local dashboards after setup:
+
+```text
+Uptime Kuma  http://127.0.0.1:3001
+Beszel       http://127.0.0.1:8090
+Dokploy      http://127.0.0.1:3000  (via SSH tunnel with default firewall rules)
+```
+
+### Public observability
+
+Copy/edit `services/.env` and set:
+
+```dotenv
+UPTIME_KUMA_HOST=status.example.com
+BESZEL_HOST=metrics.example.com
+```
+
+Point those hostnames at the server, then run:
 
 ```bash
-sudo python3 ./scripts/deploy_repo.py \
-  --repo-url git@github.com:your-org/your-app.git \
-  --dest /srv/apps/your-app \
-  --branch main \
-  --email ops@example.com \
-  --skip-github-hook \
-  --skip-example-dotfiles
+sudo bash ./setup.sh --skip-dokploy --public-observability
 ```
 
-What it does:
-- clones or updates the checkout under `/srv/apps/<repo-name>` by default
-- validates `server.conf`
-- upserts `deploy/registry.json`
-- runs the repo deploy hooks
-- creates or updates the app systemd service
-- writes or updates the nginx site
-- verifies DNS and requests/renews Let’s Encrypt
-- configures the webhook receiver and, when possible, the GitHub webhook
+The Compose overlay attaches both services to Dokploy's `dokploy-network` and lets the existing Traefik instance provide HTTPS. This avoids running a second reverse proxy.
 
-Use `--skip-example-dotfiles` for repositories whose `server.conf` and deploy hooks manage production runtime configuration directly. Without it, noninteractive deploys stop when a checked-out repository contains missing `*.example` dotfile targets that would normally be filled in through prompts.
+### Beszel agent
 
-If automatic GitHub webhook creation is not possible, the script prints the exact payload URL and secret to configure manually.
+The Beszel hub can run without a local agent. To monitor the host itself, create a public key and token in Beszel, then set:
 
-## Repair a website
+```dotenv
+BESZEL_KEY=...
+BESZEL_TOKEN=...
+```
 
-Use `repair_site.py` when a managed checkout is incomplete, a repo-owned `server.conf` has changed, or a previous deploy left the site in a failed state:
+Start the local agent:
 
 ```bash
-sudo python3 ./scripts/repair_site.py --site your-app
+sudo bash ./setup.sh --skip-dokploy --with-beszel-agent
 ```
 
-Preview the exact actions first:
+The hub and agent share a Unix socket. When adding the local system in Beszel, use:
+
+```text
+/beszel_socket/beszel.sock
+```
+
+Beszel also supports installing the agent as a native system service if containerized host monitoring is not desired; that can be done independently without changing the rest of the stack.
+
+## DNS
+
+DNS is declarative under [`services/dnscontrol`](services/dnscontrol). Provider API code should not be added back to the status UI or deployment scripts.
+
+Create the ignored credential file:
 
 ```bash
-python3 ./scripts/repair_site.py --site your-app --dry-run
+cp services/dnscontrol/creds.json.example services/dnscontrol/creds.json
+chmod 600 services/dnscontrol/creds.json
 ```
 
-Repair is designed to be idempotent and conservative:
-- it selects one site from `deploy/registry.json`
-- it aborts before deploy reset if the checkout has tracked local modifications
-- it clones or updates the configured checkout and branch
-- it creates a missing root `server.conf` only when the registry already has enough `deploy_config` metadata
-- it never overwrites an existing `server.conf`
-- it refreshes the registry from the repo-owned `server.conf`
-- it blocks if required repo config files such as `.env` are still missing
-- it redeploys through the same deploy engine used by `deploy_repo.py`
-
-The authenticated status webapp exposes the same operation as **Repair site** on each managed application.
-
-## Deployment State
-
-`deploy-repo` and the webhook receiver write deploy state into `/var/lib/server-setup/state/<site>.json`.
-
-Each state file includes:
-- `last_deploy_status`
-- `last_deploy_timestamp`
-- `current_release`
-- `checkout_path`
-- `last_attempted_release`
-- `previous_successful_release`
-- `rollback_status`
-- `rollback_reason`
-
-Failed deploys also record `last_failure_reason` and `last_failure_at`.
-Successful deploys record `last_success_at` and clear stale failure and rollback metadata. When a deploy fails after service or nginx configuration changes have started, the deploy engine attempts to restore the previous app service unit and nginx site config before recording the failure.
-
-## `server.conf`
-
-Minimal static site:
-
-```json
-{
-  "name": "simple-site",
-  "domain": "simple.example.com",
-  "build_output": "public"
-}
-```
-
-Minimal long-running service:
-
-```json
-{
-  "name": "api",
-  "domain": "api.example.com",
-  "build_output": ".",
-  "deploy_hooks": {
-    "build": "npm ci && npm run build"
-  },
-  "runtime": {
-    "mode": "service",
-    "command": "PORT=4001 npm run start",
-    "port": 4001
-  }
-}
-```
-
-Supported top-level keys:
-- `name`
-- `domain`
-- `build_output`
-- `web_root`
-- `deploy_hooks`
-- `runtime`
-- `service`
-- `nginx`
-- `dns`
-
-Legacy top-level shorthand like `build`, `command`, `port`, `www_redirect`, and infrastructure keys like `repo`, `branch`, or `workdir` are rejected.
-
-Optional DNS provider configuration enables domain management in the authenticated status webapp:
-
-```json
-{
-  "name": "api",
-  "domain": "api.example.com",
-  "build_output": ".",
-  "dns": {
-    "provider": "porkbun",
-    "zone": "example.com"
-  }
-}
-```
-
-Supported `dns.provider` values are `porkbun` and `namecheap`. Credentials stay out of `server.conf`; set them in the status webapp environment file (`/etc/default/server-setup-status-webapp`) and restart `server-setup-status-webapp.service`.
-Namecheap writes replace the full host list for the zone, so preview changes with `scripts/manage_dns_records.py ... --dry-run` before mutating production records.
-
-Porkbun:
+Declare zones and records in `services/dnscontrol/dnsconfig.js`, then preview changes:
 
 ```bash
-PORKBUN_API_KEY=...
-PORKBUN_SECRET_API_KEY=...
+cd services
+docker compose --env-file .env -f compose.yml --profile tools run --rm dnscontrol preview
 ```
 
-Namecheap:
+Apply only after reviewing the preview:
 
 ```bash
-NAMECHEAP_API_USER=...
-NAMECHEAP_API_KEY=...
-NAMECHEAP_USERNAME=...       # optional, defaults to NAMECHEAP_API_USER
-NAMECHEAP_CLIENT_IP=...      # required by Namecheap API access
-NAMECHEAP_SANDBOX=false      # optional
+docker compose --env-file .env -f compose.yml --profile tools run --rm dnscontrol push
 ```
 
-## Operational environment
+The committed credential example contains shapes for both Porkbun and Namecheap. Real `creds.json` is gitignored.
 
-The deploy registry is `deploy/registry.json`. It is host-local runtime state and should stay uncommitted; the committed `deploy/registry.example.json` is only an example.
+## Deploy applications
 
-Status webapp knobs in `/etc/default/server-setup-status-webapp`:
-- `STATUS_CONFIG_PATH`: overrides the dashboard config source. Set it to the active `deploy/registry.json` for admin deploy actions.
-- `STATUS_STATE_DIR`: overrides the deploy-state directory read by the dashboard.
-- `STATUS_WEBAPP_GITHUB_TOKEN`: token used by status webapp-launched GitHub commands.
-- DNS variables: `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY`, `NAMECHEAP_API_USER`, `NAMECHEAP_API_KEY`, `NAMECHEAP_USERNAME`, `NAMECHEAP_CLIENT_IP`, and `NAMECHEAP_SANDBOX`.
+For the canonical path, create applications or Compose projects in Dokploy and connect their Git sources there. Dokploy owns application environment variables, build/deploy configuration, domains, HTTPS, auto-deploy webhooks, logs, and rollback state.
 
-Automation knobs in `/etc/default/site-automation`:
-- `REGISTRY_PATH`: deploy registry used by webhook redeploys.
-- `STATE_DIR`: deploy-state directory written by automation.
-- `SITE_AUTOMATION_GITHUB_TOKEN`: token used by automation-launched GitHub commands.
+A new application does **not** need `server.conf` merely to satisfy `server-setup`. Prefer the application's normal deployment contract (`Dockerfile`, Compose file, or Dokploy build settings) instead of adding another repository-specific hosting abstraction.
 
-## Operate the stack
+## Legacy implementation
 
-Show managed services:
+The previous deployment engine remains in the repository for existing hosts while they migrate. It includes:
+
+- `scripts/prepare_server.py`
+- `scripts/deploy_repo.py`
+- `scripts/deploy_engine.py`
+- `scripts/install_nginx_site.py`
+- `scripts/repair_site.py`
+- the custom webhook receiver
+- `monitor/webapp`
+- the `server.conf` deployment contract
+
+Those files are compatibility/migration code, not the architecture for new installations. Do not expand them with new deployment-platform features when an established service already owns the responsibility.
+
+## Development and tests
+
+Run the repository suite:
 
 ```bash
-python3 ./scripts/manage_services.py
+./tests/run-tests.sh
 ```
 
-Restart one app service:
+The service-stack test validates both the base Compose model and the optional Dokploy/Traefik overlay without starting production services.
 
-```bash
-sudo python3 ./scripts/manage_services.py restart --app your-app
-```
-
-Manage repository secrets from the terminal:
-
-```bash
-python3 ./scripts/manage_github_secrets.py list --site your-app
-python3 ./scripts/manage_github_secrets.py set MY_SECRET --site your-app --value "super-secret"
-python3 ./scripts/manage_github_secrets.py delete MY_SECRET --site your-app
-```
-
-The script scans `.github/workflows/*.yml` and `.github/workflows/*.yaml` in the checked-out repository for `secrets.*` references, then stores values in the repo-local env file. If the repo has a root `.env.example`, the managed target is the matching `.env`; otherwise the script falls back to the runtime env file or `./.env`.
-
-Stop managed services:
-
-```bash
-sudo python3 ./scripts/shutdown_server.py
-```
-
-Preview purge:
-
-```bash
-sudo python3 ./scripts/shutdown_server.py --purge --dry-run
-```
-
-## Troubleshooting
-
-Webhook does not trigger:
-- confirm `site-webhook-receiver.service` is active with `systemctl status site-webhook-receiver.service`
-- confirm `/etc/default/site-automation` contains `WEBHOOK_SECRET`, `WEBHOOK_ALLOWED_REPOS`, `WEBHOOK_ALLOWED_BRANCHES`, `REGISTRY_PATH`, and `DEFAULT_TLS_EMAIL`
-- confirm the GitHub webhook payload URL matches `WEBHOOK_PATH` and the public host/port that reaches the receiver
-- check `/var/log/server-setup/webhook-*.log` for rejected signatures, unmatched repos, or unmatched branches
-
-Webhook triggers but old code is served:
-- check `/var/log/server-setup/webhook-*.log` for `checkout refresh` and `registry refresh` events
-- confirm `deploy/registry.json` points at the expected `checkout_path`, `branch`, and `webhook_repo`
-- run `sudo python3 ./scripts/repair_site.py --site your-app` to refresh the checkout, registry metadata, automation env, and deploy state through the same deploy engine
-
-TLS setup fails:
-- confirm `DEFAULT_TLS_EMAIL` is set in `/etc/default/site-automation`
-- confirm the domain resolves to this server before retrying
-- run `sudo certbot certificates` and inspect `/var/log/letsencrypt/letsencrypt.log`
-- rerun repair after DNS and certificate issues are resolved
-
-DNS verification fails:
-- confirm the domain's A/AAAA records point at the server's public IP
-- if using managed DNS, confirm `dns.provider` and `dns.zone` in `server.conf`, then set the matching provider credentials in `/etc/default/server-setup-status-webapp`
-- restart `server-setup-status-webapp.service` after changing DNS provider credentials
-
-Status webapp admin token is missing:
-- set `STATUS_WEBAPP_ADMIN_TOKEN` in `/etc/default/server-setup-status-webapp`
-- restart with `sudo systemctl restart server-setup-status-webapp.service`
-- use the same token in the dashboard token field or send it as the `x-status-admin-token` API header
-
-## Legacy Migration
-
-If you still have an older `deploy/sites.json` based installation, [`scripts/migrate_registry.py`](scripts/migrate_registry.py) can perform a one-time migration into `deploy/registry.json`. That migration path is for existing legacy installs only; new setups should use `prepare-server` and `deploy-repo` directly.
-
-## Development
-
-Development and testing notes live in [`INSTALLING-AND-TESTING.md`](INSTALLING-AND-TESTING.md).
+Additional development notes live in [`INSTALLING-AND-TESTING.md`](INSTALLING-AND-TESTING.md).
