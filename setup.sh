@@ -19,7 +19,7 @@ WITH_SSH_HARDENING=0
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./setup.sh [options]
+Usage: sudo bash ./setup.sh [options]
 
 Install the canonical server-setup service architecture:
   Dokploy       application deployments, Git webhooks, Traefik, TLS, rollbacks
@@ -66,7 +66,7 @@ run() {
 
 require_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-    die "Run this script as root, for example: sudo ./setup.sh"
+    die "Run this script as root, for example: sudo bash ./setup.sh"
   fi
 }
 
@@ -179,7 +179,11 @@ install_dokploy() {
   if [[ "$REPLACE_LEGACY" -eq 1 ]]; then
     stop_legacy_edge
   fi
-  assert_dokploy_ports_free
+  if [[ "$DRY_RUN" -eq 1 && "$REPLACE_LEGACY" -eq 1 ]]; then
+    log "Dry run: skipping the post-stop port assertion because legacy units were not actually stopped."
+  else
+    assert_dokploy_ports_free
+  fi
 
   log "Installing Dokploy with its upstream stable installer."
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -190,11 +194,11 @@ install_dokploy() {
 
   local installer
   installer="$(mktemp)"
-  trap 'rm -f "$installer"' RETURN
+  trap 'rm -f "$installer"' EXIT
   curl -fsSL "$DOKPLOY_INSTALL_URL" -o "$installer"
   bash "$installer"
   rm -f "$installer"
-  trap - RETURN
+  trap - EXIT
 }
 
 ensure_docker_compose() {
@@ -275,6 +279,11 @@ print_summary() {
   uptime_port="${uptime_port:-3001}"
   beszel_port="${beszel_port:-8090}"
 
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    printf '\nDry run complete; no mutating commands above were executed.\n'
+    return
+  fi
+
   cat <<EOF
 
 Connected-services setup complete.
@@ -290,10 +299,14 @@ DNSControl:
   cd "$SERVICES_DIR"
   docker compose --env-file .env -f compose.yml --profile tools run --rm dnscontrol preview
 
-Notes:
-  - With default hardening, port 3000 is not opened by UFW; use an SSH tunnel for initial Dokploy access.
-  - Application domains, TLS, Git sources, auto-deploy webhooks, logs, and rollback now belong in Dokploy.
-  - DNS declarations live in services/dnscontrol/dnsconfig.js; credentials belong in ignored creds.json.
+Security note:
+  Dokploy initially publishes port 3000 through Docker. UFW alone may not block Docker-published ports.
+  Create the Dokploy admin account, configure an HTTPS domain, verify it, then follow Dokploy's recommendation
+  to remove the direct 3000 publication (or block it with your VPS/provider firewall).
+
+Architecture boundary:
+  Application domains, TLS, Git sources, auto-deploy webhooks, logs, and rollback now belong in Dokploy.
+  DNS declarations live in services/dnscontrol/dnsconfig.js; credentials belong in ignored creds.json.
 EOF
 }
 
