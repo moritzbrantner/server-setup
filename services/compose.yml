@@ -2,7 +2,7 @@ name: server-setup-services
 
 services:
   uptime-kuma:
-    image: louislam/uptime-kuma:2.3.2
+    image: louislam/uptime-kuma:2.5.0
     restart: unless-stopped
     expose:
       - "3001"
@@ -45,7 +45,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   dnscontrol:
-    image: ghcr.io/dnscontrol/dnscontrol:v4.43.2
+    image: ghcr.io/dnscontrol/dnscontrol:4.44.1
     profiles:
       - tools
     working_dir: /dns
