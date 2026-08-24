@@ -5,3 +5,4 @@ deploy/registry.json
 monitor/webapp/.next/
 monitor/webapp/node_modules/
 monitor/webapp/tsconfig.tsbuildinfo
+services/dnscontrol/creds.json
