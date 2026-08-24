@@ -51,7 +51,7 @@ sudo bash ./setup.sh
 The installer:
 
 1. installs a minimal host baseline (`curl`, `git`, `jq`, Python, networking tools),
-2. installs Dokploy with its upstream stable installer when it is not already present,
+2. installs the pinned Dokploy release declared by `DOKPLOY_VERSION` when it is not already present,
 3. creates `services/.env` from the committed example,
 4. starts Uptime Kuma and the Beszel hub with Docker Compose,
 5. pulls DNSControl as the DNS administration tool,
@@ -84,16 +84,48 @@ After that, administer Dokploy through its HTTPS domain rather than `server-ip:3
 --skip-dokploy           use an already-installed Dokploy/Docker control plane
 --skip-observability     do not start Uptime Kuma or Beszel
 --skip-hardening         do not change UFW/fail2ban/unattended-upgrades
---replace-legacy         stop legacy nginx/webhook/status units if they block Dokploy
+--cutover-preflight     inventory legacy apps, units, and occupied ports without changes
+--replace-legacy         stop the legacy edge during initial Dokploy installation
+--confirm-legacy-cutover-ready
+                         acknowledge backups, prepared app definitions, rollback access, and downtime
 --public-observability   expose Uptime Kuma and Beszel through Dokploy Traefik
 --with-beszel-agent      start the local Beszel agent after KEY/TOKEN are configured
 --with-ssh-hardening     explicitly opt in to SSH hardening
 --dry-run                print mutating commands without executing them
 ```
 
-`--replace-legacy` is a cut-over switch, not an application migration command. It can interrupt traffic because the old nginx edge is stopped to free ports 80/443. Recreate or migrate the applications in Dokploy before relying on the new edge for production traffic.
+### Same-server migration and cut-over
 
-The installer refuses to run Dokploy's standard installer over an unrelated active Docker Swarm. In that case, install Dokploy into the existing Swarm deliberately and rerun with `--skip-dokploy`.
+Dokploy and the legacy nginx edge both require ports 80/443, so an in-place migration has a maintenance window. The installer does not claim to provide zero-downtime application migration.
+
+Run the read-only inventory first and save its output with the rest of the change record:
+
+```bash
+sudo bash ./setup.sh --cutover-preflight
+```
+
+Before cut-over:
+
+1. back up the legacy registry, application checkouts, environment files, databases, uploaded data, and any certificates or service overrides needed for rollback,
+2. prepare a Dokploy-compatible Dockerfile, Compose file, or build configuration for every listed application,
+3. preserve console or SSH access that does not depend on the applications being migrated,
+4. schedule downtime and decide the health checks that must pass before the migration is accepted.
+
+Then run:
+
+```bash
+sudo bash ./setup.sh \
+  --replace-legacy \
+  --confirm-legacy-cutover-ready
+```
+
+The installer downloads the pinned Dokploy release before stopping traffic. If ports remain occupied, installation fails, or Dokploy does not become ready on ports 80/443/3000, it attempts to restart every legacy unit that was active before the attempt and reports any unit that could not be restored. Only after the Dokploy edge is ready does it disable the legacy units.
+
+This automatic rollback protects the Dokploy installation step only. Once Dokploy is running, recreate the applications and verify their domains, persistent data, and health checks. A later application-level rollback is manual: free ports 80/443 from the Dokploy edge, then re-enable the legacy units recorded by the preflight.
+
+`--replace-legacy` cannot be combined with `--skip-dokploy`, and it is intentionally rejected after Dokploy is already installed. The installer also refuses to run over an unrelated active Docker Swarm.
+
+The default `DOKPLOY_VERSION` is pinned for reproducibility. Update that value deliberately when adopting a newer release; `DOKPLOY_INSTALL_URL` remains an explicit override for controlled testing.
 
 ## Operations services
 
