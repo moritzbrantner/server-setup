@@ -9,6 +9,7 @@ if ! command -v shellcheck >/dev/null 2>&1; then
 fi
 
 shellcheck -x -P "$ROOT_DIR/tests" \
+  "$ROOT_DIR/setup.sh" \
   "$ROOT_DIR"/tests/*.sh \
   "$ROOT_DIR"/tests/lib/*.sh \
   "$ROOT_DIR"/benchmarks/*.sh
