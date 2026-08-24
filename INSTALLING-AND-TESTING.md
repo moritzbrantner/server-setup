@@ -64,8 +64,11 @@ The canonical host setup itself is intentionally tested on a disposable Ubuntu/D
 Before a real-host integration test, review the safety conditions documented in the README:
 
 - do not run the upstream Dokploy installer over an unrelated active Swarm,
-- ports 80/443/3000 must be available,
-- `--replace-legacy` is an explicit traffic cut-over and does not migrate applications,
+- run `./setup.sh --cutover-preflight` and preserve its legacy app/unit/port inventory,
+- same-server replacement requires both `--replace-legacy` and `--confirm-legacy-cutover-ready`,
+- ports 80/443/3000 must become available during the maintenance window,
+- installation failures attempt to restart units that were active before cut-over and report incomplete rollback; application-level rollback remains manual,
+- the default Dokploy installer URL is pinned through `DOKPLOY_VERSION`,
 - Docker-published ports require Docker-aware or provider-level firewalling.
 
 ## Legacy Docker sandbox
