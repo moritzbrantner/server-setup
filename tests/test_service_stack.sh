@@ -29,7 +29,7 @@ confirmed_output="$(bash "$ROOT_DIR/setup.sh" --dry-run --replace-legacy --confi
 grep -Fq 'Installing pinned Dokploy release v0.30.2.' <<<"$confirmed_output"
 grep -Fq 'Dry run complete; no mutating commands above were executed.' <<<"$confirmed_output"
 
-grep -Fq 'releases/download/${DOKPLOY_VERSION}/install.sh' "$ROOT_DIR/setup.sh"
+grep -Fq "releases/download/\${DOKPLOY_VERSION}/install.sh" "$ROOT_DIR/setup.sh"
 grep -Fq 'restart_active_legacy_edge' "$ROOT_DIR/setup.sh"
 grep -Fq 'wait_for_dokploy_ready' "$ROOT_DIR/setup.sh"
 grep -Fq 'disable_legacy_edge' "$ROOT_DIR/setup.sh"
@@ -40,7 +40,7 @@ BESZEL_HOST=metrics.example.com \
 BESZEL_APP_URL=https://metrics.example.com \
   docker compose --env-file "$ENV_EXAMPLE" -f "$BASE" -f "$PUBLIC" config --quiet
 
-grep -Fq '127.0.0.1:${UPTIME_KUMA_PORT:-3001}:3001' "$BASE"
-grep -Fq '127.0.0.1:${BESZEL_PORT:-8090}:8090' "$BASE"
+grep -Fq "127.0.0.1:\${UPTIME_KUMA_PORT:-3001}:3001" "$BASE"
+grep -Fq "127.0.0.1:\${BESZEL_PORT:-8090}:8090" "$BASE"
 grep -Fq 'dokploy-network' "$PUBLIC"
 grep -Fq 'services/dnscontrol/creds.json' "$ROOT_DIR/.gitignore"
