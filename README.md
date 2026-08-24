@@ -57,13 +57,26 @@ The installer:
 5. pulls DNSControl as the DNS administration tool,
 6. applies the existing host-native UFW/fail2ban/unattended-upgrades hardening.
 
-The Uptime Kuma and Beszel ports bind to `127.0.0.1` by default. Dokploy owns ports 80/443 for application traffic. The hardening script intentionally does not open Dokploy's port 3000, so initial administration can use an SSH tunnel:
+The Uptime Kuma and Beszel ports bind to `127.0.0.1` by default. Dokploy owns ports 80/443 for application traffic and initially publishes its administration UI on port 3000.
+
+### Secure Dokploy after first login
+
+Do not assume UFW hides Docker-published ports: Docker can bypass UFW's normal input rules. Treat Dokploy's initial port 3000 as externally reachable unless a provider/VPS firewall blocks it.
+
+Recommended bootstrap:
+
+1. restrict port 3000 at the VPS/provider firewall to your own IP when possible,
+2. create the Dokploy administrator account,
+3. configure and verify an HTTPS domain for the Dokploy panel,
+4. remove direct IP:port access with Dokploy's recommended command:
 
 ```bash
-ssh -L 3000:127.0.0.1:3000 user@server
+docker service update \
+  --publish-rm "published=3000,target=3000,mode=host" \
+  dokploy
 ```
 
-Then open `http://127.0.0.1:3000` locally.
+After that, administer Dokploy through its HTTPS domain rather than `server-ip:3000`.
 
 ### Installer options
 
@@ -91,7 +104,7 @@ Local dashboards after setup:
 ```text
 Uptime Kuma  http://127.0.0.1:3001
 Beszel       http://127.0.0.1:8090
-Dokploy      http://127.0.0.1:3000  (via SSH tunnel with default firewall rules)
+Dokploy      http://<server-ip>:3000 during initial setup; secure it immediately
 ```
 
 ### Public observability
