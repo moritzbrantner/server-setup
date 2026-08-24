@@ -1,0 +1,12 @@
+{
+  "porkbun": {
+    "TYPE": "PORKBUN",
+    "api_key": "replace-me",
+    "secret_key": "replace-me"
+  },
+  "namecheap": {
+    "TYPE": "NAMECHEAP",
+    "apikey": "replace-me",
+    "apiuser": "replace-me"
+  }
+}
