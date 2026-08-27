@@ -10,9 +10,19 @@ cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker build --build-arg "BASE_IMAGE=$BASE_IMAGE" -t "$IMAGE" "$ROOT_DIR/tests/host-sandbox"
-docker run --privileged --detach --name "$CONTAINER" --tmpfs /run --tmpfs /run/lock --volume /sys/fs/cgroup:/sys/fs/cgroup:rw "$IMAGE" >/dev/null
+docker run \
+  --privileged \
+  --cgroupns=host \
+  --detach \
+  --name "$CONTAINER" \
+  --tmpfs /run \
+  --tmpfs /run/lock \
+  --volume /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  "$IMAGE" >/dev/null
 for _ in $(seq 1 30); do
-  if docker exec "$CONTAINER" systemctl is-system-running >/dev/null 2>&1; then break; fi
+  if docker exec "$CONTAINER" systemctl is-system-running >/dev/null 2>&1; then
+    break
+  fi
   sleep 1
 done
 
@@ -23,5 +33,8 @@ docker exec -w /workspace/server-setup "$CONTAINER" bash ./setup.sh --non-intera
 docker exec "$CONTAINER" server-setup validate --config /tmp/server-setup-config.toml
 SECOND_PLAN="$(docker exec "$CONTAINER" server-setup plan --config /tmp/server-setup-config.toml)"
 printf '%s\n' "$SECOND_PLAN"
-if [[ "$SECOND_PLAN" != *"No changes."* ]]; then echo "Second plan was not empty; apply is not idempotent." >&2; exit 1; fi
+if [[ "$SECOND_PLAN" != *"No changes."* ]]; then
+  echo "Second plan was not empty; apply is not idempotent." >&2
+  exit 1
+fi
 docker exec -w /workspace/server-setup "$CONTAINER" bash ./setup.sh --non-interactive --config /tmp/server-setup-config.toml --yes
