@@ -218,7 +218,7 @@ def run(argv: list[str] | None = None, *, system: System | None = None) -> int:
             _write_config(host_system, args.config, config)
             if args.no_apply:
                 return 0
-            return _apply(config, host_system, yes=args.yes or args.non_interactive, allow_dangerous=args.allow_dangerous)
+            return _apply(config, host_system, yes=args.yes, allow_dangerous=args.allow_dangerous)
         config = _load(args.config)
         core = _core(config, host_system)
         if args.command == "plan":
