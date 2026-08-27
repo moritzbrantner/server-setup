@@ -10,11 +10,15 @@ PUBLIC="$ROOT_DIR/services/compose.public.yml"
 bash -n "$ROOT_DIR/setup.sh"
 bash -n "$LEGACY_SETUP"
 
+new_help_output="$(bash "$ROOT_DIR/setup.sh" --help)"
+grep -Fq -- '--non-interactive' <<<"$new_help_output"
+grep -Fq -- '--allow-dangerous' <<<"$new_help_output"
+
 # Legacy cut-over behavior remains available through the compatibility path
 # while fresh installations move to the new Python host-management core.
-help_output="$(bash "$ROOT_DIR/setup.sh" --legacy --help)"
-grep -Fq -- '--cutover-preflight' <<<"$help_output"
-grep -Fq -- '--confirm-legacy-cutover-ready' <<<"$help_output"
+legacy_help_output="$(bash "$ROOT_DIR/setup.sh" --legacy --help)"
+grep -Fq -- '--cutover-preflight' <<<"$legacy_help_output"
+grep -Fq -- '--confirm-legacy-cutover-ready' <<<"$legacy_help_output"
 
 preflight_output="$(bash "$ROOT_DIR/setup.sh" --cutover-preflight)"
 grep -Fq 'Cut-over preflight (read-only)' <<<"$preflight_output"
