@@ -1,0 +1,21 @@
+version = 1
+
+[host]
+timezone = "UTC"
+unattended_upgrades = true
+
+[security]
+firewall = true
+fail2ban = true
+ssh_hardening = false
+
+[dokploy]
+enabled = true
+version = "v0.30.2"
+
+[dns]
+enabled = false
+
+[monitoring]
+uptime_kuma = false
+beszel = false
