@@ -60,6 +60,23 @@ class SecurityModuleTests(unittest.TestCase):
         self.assertEqual(module.plan(module.inspect(), desired), ())
         self.assertTrue(all(result.status.value in {"pass", "skip"} for result in module.validate(desired)))
 
+    def test_firewall_allows_effective_custom_ssh_port_before_activation(self) -> None:
+        system = FakeSystem()
+        system.sshd_ports = {2222}
+        system.env["SSH_CONNECTION"] = "192.0.2.1 50000 192.0.2.2 2222"
+        module = SecurityModule(system)
+        desired = module.desired(ServerSetupConfig())
+        changes = tuple(change for change in module.plan(module.inspect(), desired) if change.action == "configure-firewall")
+
+        module.apply(changes)
+
+        self.assertTrue(system.ufw_active)
+        self.assertIn("2222/tcp", system.ufw_rules)
+        self.assertNotIn("22/tcp", system.ufw_rules)
+        allow_index = system.calls.index(("ufw", "allow", "2222/tcp"))
+        enable_index = system.calls.index(("ufw", "--force", "enable"))
+        self.assertLess(allow_index, enable_index)
+
     def test_ssh_hardening_refuses_remote_lockout(self) -> None:
         system = FakeSystem()
         system.env.update({"USER": "user", "SSH_CONNECTION": "1 2 3 4"})
