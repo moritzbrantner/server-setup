@@ -11,15 +11,6 @@ from server_setup.system import System, package_installed, service_active
 
 AUTO_UPGRADES = 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n'
 UNATTENDED_LOCAL = 'Unattended-Upgrade::Automatic-Reboot "false";\nUnattended-Upgrade::Remove-Unused-Dependencies "true";\n'
-FAIL2BAN_SSHD = (
-    "[sshd]\n"
-    "enabled = true\n"
-    "port = ssh\n"
-    "backend = systemd\n"
-    "maxretry = 5\n"
-    "findtime = 10m\n"
-    "bantime = 1h\n"
-)
 SSHD_HARDENING = (
     "# Managed by server-setup\n"
     "Protocol 2\n"
@@ -39,6 +30,19 @@ AUTO_UPGRADES_PATH = "/etc/apt/apt.conf.d/20auto-upgrades"
 UNATTENDED_LOCAL_PATH = "/etc/apt/apt.conf.d/52unattended-upgrades-local"
 FAIL2BAN_PATH = "/etc/fail2ban/jail.d/sshd.local"
 SSHD_HARDENING_PATH = "/etc/ssh/sshd_config.d/99-server-setup-hardening.conf"
+
+
+def _fail2ban_sshd_config(ssh_ports: tuple[int, ...]) -> str:
+    ports = ",".join(map(str, ssh_ports))
+    return (
+        "[sshd]\n"
+        "enabled = true\n"
+        f"port = {ports}\n"
+        "backend = systemd\n"
+        "maxretry = 5\n"
+        "findtime = 10m\n"
+        "bantime = 1h\n"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,10 +78,10 @@ class SecurityModule:
             and service_active(self.system, "unattended-upgrades")
         )
 
-    def _fail2ban_ready(self) -> bool:
+    def _fail2ban_ready(self, ssh_ports: tuple[int, ...]) -> bool:
         return (
             package_installed(self.system, "fail2ban")
-            and self.system.read_text(FAIL2BAN_PATH) == FAIL2BAN_SSHD
+            and self.system.read_text(FAIL2BAN_PATH) == _fail2ban_sshd_config(ssh_ports)
             and service_active(self.system, "fail2ban")
         )
 
@@ -115,7 +119,7 @@ class SecurityModule:
         firewall_ready, firewall_active = self._firewall_state(ssh_ports)
         return SecurityState(
             unattended_ready=self._unattended_ready(),
-            fail2ban_ready=self._fail2ban_ready(),
+            fail2ban_ready=self._fail2ban_ready(ssh_ports),
             firewall_ready=firewall_ready,
             firewall_active=firewall_active,
             ssh_hardening_ready=self.system.read_text(SSHD_HARDENING_PATH) == SSHD_HARDENING,
@@ -188,7 +192,7 @@ class SecurityModule:
 
     def _configure_fail2ban(self) -> None:
         self._ensure_packages(("fail2ban",))
-        self.system.write_text(FAIL2BAN_PATH, FAIL2BAN_SSHD)
+        self.system.write_text(FAIL2BAN_PATH, _fail2ban_sshd_config(self._ssh_ports()))
         self.system.run(["systemctl", "enable", "--now", "fail2ban"], check=True)
         self.system.run(["systemctl", "restart", "fail2ban"], check=True)
 
@@ -219,6 +223,12 @@ class SecurityModule:
     def _ensure_ssh_key_safety(self) -> None:
         if not self.system.getenv("SSH_CONNECTION"):
             return
+        user = self.system.getenv("SUDO_USER") or self.system.getenv("USER", "root") or "root"
+        if user == "root":
+            raise ModuleApplyError(
+                "Refusing SSH hardening from a remote root session because PermitRootLogin=no would remove the current "
+                "reconnect path. Create and verify a non-root sudo user first."
+            )
         authorized_keys = f"{self._ssh_user_home()}/.ssh/authorized_keys"
         if not (self.system.read_text(authorized_keys) or "").strip():
             raise ModuleApplyError(
