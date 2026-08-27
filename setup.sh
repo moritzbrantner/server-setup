@@ -6,22 +6,48 @@ INSTALL_DIR="${SERVER_SETUP_INSTALL_DIR:-/opt/server-setup}"
 BIN_PATH="${SERVER_SETUP_BIN_PATH:-/usr/local/bin/server-setup}"
 
 legacy_requested=0
+legacy_args=()
 for arg in "$@"; do
+  if [[ "$arg" == "--legacy" ]]; then
+    legacy_requested=1
+    continue
+  fi
+  legacy_args+=("$arg")
   case "$arg" in
-    --legacy|--skip-dokploy|--skip-observability|--skip-hardening|--cutover-preflight|--replace-legacy|--confirm-legacy-cutover-ready|--public-observability|--with-beszel-agent|--with-ssh-hardening|--dry-run)
+    --skip-dokploy|--skip-observability|--skip-hardening|--cutover-preflight|--replace-legacy|--confirm-legacy-cutover-ready|--public-observability|--with-beszel-agent|--with-ssh-hardening|--dry-run)
       legacy_requested=1
       ;;
   esac
 done
 
 if [[ "$legacy_requested" -eq 1 ]]; then
-  args=("$@")
-  if [[ "${args[0]:-}" == "--legacy" ]]; then
-    args=("${args[@]:1}")
-  fi
   echo "[server-setup] Using the compatibility installer. New installations should use the guided host bootstrap." >&2
-  exec bash "$ROOT_DIR/scripts/legacy_setup.sh" "${args[@]}"
+  exec bash "$ROOT_DIR/scripts/legacy_setup.sh" "${legacy_args[@]}"
 fi
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      cat <<'EOF'
+Usage: sudo ./setup.sh [options]
+
+Bootstrap the new idempotent server-setup host manager and run guided setup.
+
+Options passed to guided setup:
+  --config PATH          use a non-default TOML configuration path
+  --non-interactive      do not prompt; use the supplied/default configuration
+  --no-apply             write/review configuration without changing host state
+  --yes                  confirm a non-interactive apply
+  --allow-dangerous      allow explicitly classified dangerous changes
+  -h, --help             show this help without changing the host
+
+Legacy migration/compatibility options remain available via:
+  sudo ./setup.sh --legacy --help
+EOF
+      exit 0
+      ;;
+  esac
+done
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   echo "[server-setup] ERROR: run setup.sh as root (for example with sudo)." >&2
@@ -39,6 +65,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y python3 ca-certificates
 
 python3 - <<'PY'
 import sys
+
 if sys.version_info < (3, 11):
     raise SystemExit("server-setup requires Python 3.11+ (Debian 12 or Ubuntu 24.04 in PR2)")
 PY
