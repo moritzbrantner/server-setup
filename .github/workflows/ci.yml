@@ -9,27 +9,44 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: server-setup-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: monitor/webapp/package-lock.json
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y jq shellcheck python3 pipx
           pipx install ruff
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
       - name: Run repository test suite
         run: ./tests/run-tests.sh
+
+  host-sandbox:
+    name: Host sandbox (${{ matrix.base_image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        base_image:
+          - debian:12
+          - ubuntu:24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run idempotent host bootstrap
+        run: ./tests/host-sandbox/run.sh "${{ matrix.base_image }}"
