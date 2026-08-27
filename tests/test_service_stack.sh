@@ -38,7 +38,7 @@ grep -Fq "releases/download/\${DOKPLOY_VERSION}/install.sh" "$LEGACY_SETUP"
 grep -Fq 'restart_active_legacy_edge' "$LEGACY_SETUP"
 grep -Fq 'wait_for_dokploy_ready' "$LEGACY_SETUP"
 grep -Fq 'disable_legacy_edge' "$LEGACY_SETUP"
-grep -Fq 'server-setup" setup' "$ROOT_DIR/setup.sh"
+grep -Fq 'exec "$BIN_PATH" setup' "$ROOT_DIR/setup.sh"
 
 docker compose --env-file "$ENV_EXAMPLE" -f "$BASE" config --quiet
 UPTIME_KUMA_HOST=status.example.com \
