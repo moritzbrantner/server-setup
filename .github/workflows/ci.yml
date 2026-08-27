@@ -2,15 +2,17 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  push: {}
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Same-repository branch pushes are first-class because coding agents and
+# connector-authored PRs may not emit a usable pull_request check run. Both
+# event types validate the same head SHA; concurrency collapses duplicate work.
 concurrency:
-  group: server-setup-${{ github.workflow }}-${{ github.ref }}
+  group: server-setup-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
