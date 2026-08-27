@@ -77,6 +77,29 @@ class SecurityModuleTests(unittest.TestCase):
         enable_index = system.calls.index(("ufw", "--force", "enable"))
         self.assertLess(allow_index, enable_index)
 
+    def test_fail2ban_tracks_effective_custom_ssh_port(self) -> None:
+        system = FakeSystem()
+        system.sshd_ports = {2222}
+        module = SecurityModule(system)
+        desired = module.desired(ServerSetupConfig())
+        changes = tuple(change for change in module.plan(module.inspect(), desired) if change.action == "configure-fail2ban")
+
+        module.apply(changes)
+
+        self.assertIn("port = 2222\n", system.files["/etc/fail2ban/jail.d/sshd.local"])
+
+    def test_ssh_hardening_refuses_remote_root_session(self) -> None:
+        system = FakeSystem()
+        system.env.update({"USER": "root", "SSH_CONNECTION": "1 2 3 22"})
+        system.files["/root/.ssh/authorized_keys"] = "ssh-ed25519 test"
+        module = SecurityModule(system)
+        config = replace(ServerSetupConfig(), security=replace(ServerSetupConfig().security, ssh_hardening=True))
+        changes = module.plan(module.inspect(), module.desired(config))
+        ssh_change = tuple(change for change in changes if change.action == "configure-ssh")
+
+        with self.assertRaisesRegex(ModuleApplyError, "remote root session"):
+            module.apply(ssh_change)
+
     def test_ssh_hardening_refuses_remote_lockout(self) -> None:
         system = FakeSystem()
         system.env.update({"USER": "user", "SSH_CONNECTION": "1 2 3 4"})
