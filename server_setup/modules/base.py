@@ -8,34 +8,15 @@ from server_setup.config import ServerSetupConfig
 from server_setup.plan import Change, ValidationResult
 
 
+class ModuleApplyError(RuntimeError):
+    """Raised when a planned host change cannot be safely applied."""
+
+
 @runtime_checkable
 class ServerModule(Protocol):
-    """One independently plannable host-management responsibility.
-
-    Modules inspect real host state, derive desired state from the shared config,
-    produce a read-only plan, apply only their own planned changes, and validate
-    the resulting host state. Application deployment is intentionally outside
-    this contract and remains Dokploy's responsibility.
-    """
-
     name: str
-
-    def inspect(self) -> object:
-        """Return the current state required for planning."""
-        ...
-
-    def desired(self, config: ServerSetupConfig) -> object:
-        """Return this module's desired state for the supplied configuration."""
-        ...
-
-    def plan(self, current: object, desired: object) -> Sequence[Change]:
-        """Describe required changes without mutating the host."""
-        ...
-
-    def apply(self, changes: Sequence[Change]) -> None:
-        """Apply previously planned changes owned by this module."""
-        ...
-
-    def validate(self, desired: object) -> Sequence[ValidationResult]:
-        """Read host state and report whether the desired state is satisfied."""
-        ...
+    def inspect(self) -> object: ...
+    def desired(self, config: ServerSetupConfig) -> object: ...
+    def plan(self, current: object, desired: object) -> Sequence[Change]: ...
+    def apply(self, changes: Sequence[Change]) -> None: ...
+    def validate(self, desired: object) -> Sequence[ValidationResult]: ...
