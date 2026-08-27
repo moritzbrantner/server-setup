@@ -94,6 +94,12 @@ beszel = true
 
         self.assertEqual(parse_config(rendered), config)
 
+    def test_committed_example_matches_schema(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = load_config(root / "config.example.toml")
+
+        self.assertEqual(config.version, CONFIG_VERSION)
+
     def test_load_config_wraps_file_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             missing = Path(temp_dir) / "missing.toml"
