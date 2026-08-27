@@ -15,9 +15,9 @@ shellcheck -x -P "$ROOT_DIR/tests" \
   "$ROOT_DIR"/benchmarks/*.sh
 
 if python3 -m ruff --version >/dev/null 2>&1; then
-  python3 -m ruff check "$ROOT_DIR/scripts" "$ROOT_DIR/tests"
+  python3 -m ruff check "$ROOT_DIR/server_setup" "$ROOT_DIR/scripts" "$ROOT_DIR/tests"
 elif command -v ruff >/dev/null 2>&1; then
-  ruff check "$ROOT_DIR/scripts" "$ROOT_DIR/tests"
+  ruff check "$ROOT_DIR/server_setup" "$ROOT_DIR/scripts" "$ROOT_DIR/tests"
 else
   echo "ruff is not installed; skipping Python lint. Install it with: python3 -m pip install ruff" >&2
 fi
