@@ -7,7 +7,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from server_setup.config import ConfigError, DEFAULT_CONFIG_PATH, ServerSetupConfig, load_config, render_config
+from server_setup.config import ConfigError, DEFAULT_CONFIG_PATH, ServerSetupConfig, parse_config, render_config
 from server_setup.core import ServerSetupCore
 from server_setup.modules import ModuleApplyError, default_modules
 from server_setup.plan import ChangeKind, Plan, ValidationReport, ValidationStatus
@@ -21,8 +21,11 @@ STATUS_MARKERS = {
 }
 
 
-def _load(path: Path) -> ServerSetupConfig:
-    return load_config(path)
+def _load(system: System, path: Path) -> ServerSetupConfig:
+    text = system.read_text(path)
+    if text is None:
+        raise ConfigError(f"Unable to read configuration {path}: file does not exist")
+    return parse_config(text)
 
 
 def _core(config: ServerSetupConfig, system: System) -> ServerSetupCore:
@@ -96,8 +99,6 @@ def _wizard(config: ServerSetupConfig) -> ServerSetupConfig:
 def _write_config(system: System, path: Path, config: ServerSetupConfig) -> None:
     # Reparse before writing so wizard/programmatic callers cannot persist an invalid model.
     rendered = render_config(config)
-    from server_setup.config import parse_config
-
     parse_config(rendered)
     system.write_text(path, rendered, mode=0o600)
     print(f"Configuration written to {path}")
@@ -212,14 +213,14 @@ def run(argv: list[str] | None = None, *, system: System | None = None) -> int:
     host_system = system or LocalSystem()
     try:
         if args.command == "setup":
-            config = load_config(args.config) if host_system.exists(args.config) else ServerSetupConfig()
+            config = _load(host_system, args.config) if host_system.exists(args.config) else ServerSetupConfig()
             if not args.non_interactive:
                 config = _wizard(config)
             _write_config(host_system, args.config, config)
             if args.no_apply:
                 return 0
             return _apply(config, host_system, yes=args.yes, allow_dangerous=args.allow_dangerous)
-        config = _load(args.config)
+        config = _load(host_system, args.config)
         core = _core(config, host_system)
         if args.command == "plan":
             _print_plan(core.plan())
