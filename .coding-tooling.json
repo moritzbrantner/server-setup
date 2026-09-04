@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "profile": "repository-foundation-v1",
+  "tiers": {
+    "fast": ["lint", "test:unit"],
+    "full": ["lint", "test:unit", "test:integration"]
+  },
+  "requiredCapabilities": ["lint", "test:unit"],
+  "optionalCapabilities": ["test:integration"],
+  "capabilityCommands": {
+    ".": {
+      "lint": ["make", "lint"],
+      "test:unit": ["make", "python-test"],
+      "test:integration": ["make", "test"]
+    }
+  }
+}
