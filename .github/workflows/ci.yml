@@ -12,15 +12,15 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: "22"
+          node-version: 24.20.0
           cache: npm
           cache-dependency-path: monitor/webapp/package-lock.json
 
@@ -28,8 +28,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq shellcheck python3 pipx
-          pipx install ruff
+          pipx install ruff==0.16.6
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Record tool versions
+        run: |
+          node --version
+          npm --version
+          python3 --version
+          ruff --version
+          shellcheck --version
+          jq --version
 
       - name: Run repository test suite
         run: ./tests/run-tests.sh
