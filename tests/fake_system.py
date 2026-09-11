@@ -17,6 +17,8 @@ class FakeSystem:
         }
         self.modes: dict[str, int] = {}
         self.installed: set[str] = set()
+        self.package_versions: dict[str, str] = {}
+        self.available_versions: dict[str, str] = {}
         self.services: set[str] = set()
         self.commands = {"dpkg-query", "apt-get", "timedatectl", "systemctl", "ufw", "sshd", "ss", "curl", "bash", "df"}
         self.env: dict[str, str] = {"USER": "root"}
@@ -56,7 +58,11 @@ class FakeSystem:
             return CommandResult(0)
         if args[0] == "dpkg-query":
             package = args[-1]
-            return CommandResult(0, "install ok installed") if package in self.installed else CommandResult(1)
+            if package not in self.installed:
+                return CommandResult(1)
+            if any("${Version}" in value for value in args):
+                return CommandResult(0, self.package_versions.get(package, "1.0") + "\n")
+            return CommandResult(0, "install ok installed")
         if args[:3] == ("timedatectl", "show", "--property=Timezone"):
             return CommandResult(0, self.timezone + "\n")
         if args[:2] == ("timedatectl", "set-timezone"):
@@ -66,9 +72,25 @@ class FakeSystem:
         if args[:2] == ("apt-get", "update"):
             return CommandResult(0)
         if args[:2] == ("apt-get", "install"):
+            only_upgrade = "--only-upgrade" in args
             for value in args[2:]:
-                if value != "-y":
-                    self.installed.add(value)
+                if value.startswith("-"):
+                    continue
+                if "=" in value:
+                    package, version = value.split("=", 1)
+                    if only_upgrade and package not in self.installed:
+                        continue
+                    self.installed.add(package)
+                    self.package_versions[package] = version
+                    continue
+                package = value
+                if only_upgrade and package not in self.installed:
+                    continue
+                self.installed.add(package)
+                self.package_versions[package] = self.available_versions.get(
+                    package,
+                    self.package_versions.get(package, "1.0"),
+                )
             return CommandResult(0)
         if args[:2] == ("systemctl", "is-active"):
             return CommandResult(0 if args[-1] in self.services else 3)
