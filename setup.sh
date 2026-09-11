@@ -59,6 +59,22 @@ if ! command -v apt-get >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ ! -r /etc/os-release ]]; then
+  echo "[server-setup] ERROR: cannot determine the operating system from /etc/os-release." >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1091
+. /etc/os-release
+case "${ID:-}:${VERSION_ID:-}" in
+  debian:12|ubuntu:24.04)
+    ;;
+  *)
+    echo "[server-setup] ERROR: unsupported host ${ID:-unknown} ${VERSION_ID:-unknown}; PR2 supports Debian 12 and Ubuntu 24.04 only." >&2
+    exit 1
+    ;;
+esac
+
 # Keep this bootstrap deliberately small. The Python core owns the actual desired host state.
 apt-get update -y
 DEBIAN_FRONTEND=noninteractive apt-get install -y python3 ca-certificates
