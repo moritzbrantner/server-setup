@@ -26,10 +26,23 @@ SSHD_HARDENING = (
     "ClientAliveInterval 300\n"
     "ClientAliveCountMax 2\n"
 )
+SSHD_EFFECTIVE_SETTINGS = {
+    "passwordauthentication": "no",
+    "kbdinteractiveauthentication": "no",
+    "pubkeyauthentication": "yes",
+    "permitrootlogin": "no",
+    "permitemptypasswords": "no",
+    "x11forwarding": "no",
+    "maxauthtries": "3",
+    "logingracetime": "30",
+    "clientaliveinterval": "300",
+    "clientalivecountmax": "2",
+}
 AUTO_UPGRADES_PATH = "/etc/apt/apt.conf.d/20auto-upgrades"
 UNATTENDED_LOCAL_PATH = "/etc/apt/apt.conf.d/52unattended-upgrades-local"
 FAIL2BAN_PATH = "/etc/fail2ban/jail.d/sshd.local"
-SSHD_HARDENING_PATH = "/etc/ssh/sshd_config.d/99-server-setup-hardening.conf"
+SSHD_HARDENING_PATH = "/etc/ssh/sshd_config.d/00-server-setup-hardening.conf"
+LEGACY_SSHD_HARDENING_PATH = "/etc/ssh/sshd_config.d/99-server-setup-hardening.conf"
 
 
 def _fail2ban_sshd_config(ssh_ports: tuple[int, ...]) -> str:
@@ -85,8 +98,32 @@ class SecurityModule:
             and service_active(self.system, "fail2ban")
         )
 
+    def _sshd_effective_settings(self) -> dict[str, str]:
+        if not self.system.command_exists("sshd"):
+            return {}
+        result = self.system.run(["sshd", "-T"])
+        if result.returncode != 0:
+            return {}
+        settings: dict[str, str] = {}
+        for line in result.stdout.splitlines():
+            key, separator, value = line.partition(" ")
+            if separator:
+                settings[key.strip().lower()] = value.strip().lower()
+        return settings
+
+    def _ssh_hardening_effective(self) -> bool:
+        settings = self._sshd_effective_settings()
+        return all(settings.get(key) == value for key, value in SSHD_EFFECTIVE_SETTINGS.items())
+
     def _ssh_ports(self) -> tuple[int, ...]:
         ports: set[int] = set()
+        settings = self._sshd_effective_settings()
+        port_value = settings.get("port", "")
+        for value in port_value.split():
+            if value.isdigit():
+                port = int(value)
+                if 1 <= port <= 65535:
+                    ports.add(port)
         if self.system.command_exists("sshd"):
             result = self.system.run(["sshd", "-T"])
             if result.returncode == 0:
@@ -110,9 +147,13 @@ class SecurityModule:
             return False, False
         status = self.system.run(["ufw", "status"]).stdout
         active = "Status: active" in status
-        required_rules = tuple(f"{port}/tcp" for port in ssh_ports) + ("80/tcp", "443/tcp")
-        rules_present = all(rule in status for rule in required_rules)
-        return active and rules_present, active
+        allowed_rules: set[str] = set()
+        for line in status.splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[1] == "ALLOW":
+                allowed_rules.add(fields[0])
+        required_rules = set(tuple(f"{port}/tcp" for port in ssh_ports) + ("80/tcp", "443/tcp"))
+        return active and required_rules.issubset(allowed_rules), active
 
     def inspect(self) -> SecurityState:
         ssh_ports = self._ssh_ports()
@@ -122,7 +163,9 @@ class SecurityModule:
             fail2ban_ready=self._fail2ban_ready(ssh_ports),
             firewall_ready=firewall_ready,
             firewall_active=firewall_active,
-            ssh_hardening_ready=self.system.read_text(SSHD_HARDENING_PATH) == SSHD_HARDENING,
+            ssh_hardening_ready=(
+                self.system.read_text(SSHD_HARDENING_PATH) == SSHD_HARDENING and self._ssh_hardening_effective()
+            ),
             ssh_ports=ssh_ports,
         )
 
@@ -235,6 +278,12 @@ class SecurityModule:
                 "Refusing SSH hardening during an SSH session because no authorized_keys entry was found for the current user."
             )
 
+    def _restore_ssh_hardening(self, old_content: str | None) -> None:
+        if old_content is None:
+            self.system.remove(SSHD_HARDENING_PATH)
+        else:
+            self.system.write_text(SSHD_HARDENING_PATH, old_content)
+
     def _configure_ssh(self) -> None:
         self._ensure_ssh_key_safety()
         if not self.system.command_exists("sshd"):
@@ -243,11 +292,14 @@ class SecurityModule:
         self.system.write_text(SSHD_HARDENING_PATH, SSHD_HARDENING)
         test = self.system.run(["sshd", "-t"])
         if test.returncode != 0:
-            if old_content is None:
-                self.system.remove(SSHD_HARDENING_PATH)
-            else:
-                self.system.write_text(SSHD_HARDENING_PATH, old_content)
+            self._restore_ssh_hardening(old_content)
             raise ModuleApplyError(f"sshd configuration validation failed: {test.stderr.strip() or test.stdout.strip()}")
+        if not self._ssh_hardening_effective():
+            self._restore_ssh_hardening(old_content)
+            raise ModuleApplyError(
+                "Managed SSH hardening is not effective according to sshd -T; an earlier configuration directive is taking precedence."
+            )
+        self.system.remove(LEGACY_SSHD_HARDENING_PATH)
         self.system.run(["systemctl", "reload", "ssh"], check=True)
 
     def apply(self, changes: tuple[Change, ...]) -> None:
