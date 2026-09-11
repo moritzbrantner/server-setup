@@ -25,11 +25,13 @@ _SERVICE_BY_FIELD = {
 class MonitoringDesired:
     uptime_kuma: bool
     beszel: bool
+    dokploy_enabled: bool
 
 
 @dataclass(frozen=True, slots=True)
 class MonitoringState:
     bundle_present: bool
+    docker_present: bool
     compose_available: bool
     running_services: frozenset[str]
 
@@ -61,18 +63,20 @@ class MonitoringModule:
 
     def inspect(self) -> MonitoringState:
         bundle_present = self.system.exists(COMPOSE_PATH)
-        compose_available = bundle_present and self._compose_available()
+        docker_present = self.system.command_exists("docker")
+        compose_available = bundle_present and docker_present and self._compose_available()
         running: frozenset[str] = frozenset()
         if compose_available:
             result = self.system.run([*_compose_prefix(self.system), "ps", "--status", "running", "--services"])
             if result.returncode == 0:
                 running = frozenset(line.strip() for line in result.stdout.splitlines() if line.strip())
-        return MonitoringState(bundle_present, compose_available, running)
+        return MonitoringState(bundle_present, docker_present, compose_available, running)
 
     def desired(self, config: ServerSetupConfig) -> MonitoringDesired:
         return MonitoringDesired(
             uptime_kuma=config.monitoring.uptime_kuma,
             beszel=config.monitoring.beszel,
+            dokploy_enabled=config.dokploy.enabled,
         )
 
     def plan(self, current: object, desired: object) -> tuple[Change, ...]:
@@ -90,6 +94,18 @@ class MonitoringModule:
                     action="blocked",
                 ),
             )
+        if wants_any and not current.compose_available:
+            can_be_satisfied_by_earlier_dokploy_install = not current.docker_present and desired.dokploy_enabled
+            if not can_be_satisfied_by_earlier_dokploy_install:
+                return (
+                    Change(
+                        self.name,
+                        ChangeKind.DANGEROUS,
+                        "Monitoring requires Docker Compose",
+                        "Enable/manage Dokploy on a fresh host or install a compatible Docker Compose runtime before applying monitoring.",
+                        action="blocked",
+                    ),
+                )
 
         changes: list[Change] = []
         for field, service in _SERVICE_BY_FIELD.items():
