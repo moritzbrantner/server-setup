@@ -24,6 +24,7 @@ from server_setup.maintenance import (
 from server_setup.modules import ModuleApplyError, default_modules
 from server_setup.plan import ChangeKind, Plan, ValidationReport, ValidationStatus
 from server_setup.system import CommandError, LocalSystem, System
+from server_setup.ui import UiError, serve_ui
 
 STATUS_MARKERS = {
     ValidationStatus.PASS: "PASS",
@@ -114,7 +115,6 @@ def _wizard(config: ServerSetupConfig) -> ServerSetupConfig:
 
 
 def _write_config(system: System, path: Path, config: ServerSetupConfig) -> None:
-    # Reparse before writing so wizard/programmatic callers cannot persist an invalid model.
     rendered = render_config(config)
     parse_config(rendered)
     system.write_text(path, rendered, mode=0o600)
@@ -378,6 +378,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = subparsers.add_parser("doctor", help="Run host validation plus capacity diagnostics")
     doctor.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+
+    ui = subparsers.add_parser("ui", help="Serve the read-only local host status UI")
+    ui.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    ui.add_argument("--host", default="127.0.0.1", help="Loopback bind address only")
+    ui.add_argument("--port", type=int, default=8765)
     return parser
 
 
@@ -416,7 +421,10 @@ def run(argv: list[str] | None = None, *, system: System | None = None) -> int:
             return _rollback(config, config_text, host_system, snapshot_path=args.snapshot, yes=args.yes)
         if args.command == "doctor":
             return _doctor(config, host_system)
-    except (ConfigError, SnapshotError, ModuleApplyError, CommandError, OSError) as error:
+        if args.command == "ui":
+            serve_ui(config, host_system, host=args.host, port=args.port)
+            return 0
+    except (ConfigError, SnapshotError, UiError, ModuleApplyError, CommandError, OSError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
     return 2
