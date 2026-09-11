@@ -1,14 +1,26 @@
-"""Command-line interface for bootstrap, planning, application, and validation."""
+"""Command-line interface for bootstrap, planning, application, validation, and maintenance."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 from server_setup.config import ConfigError, DEFAULT_CONFIG_PATH, ServerSetupConfig, parse_config, render_config
 from server_setup.core import ServerSetupCore
+from server_setup.maintenance import (
+    DEFAULT_SNAPSHOT_PATH,
+    SnapshotError,
+    capture_snapshot,
+    current_dokploy_version,
+    package_version_drift,
+    parse_snapshot,
+    render_snapshot,
+    rollback_package_versions,
+    upgrade_managed_packages,
+)
 from server_setup.modules import ModuleApplyError, default_modules
 from server_setup.plan import ChangeKind, Plan, ValidationReport, ValidationStatus
 from server_setup.system import CommandError, LocalSystem, System
@@ -21,11 +33,16 @@ STATUS_MARKERS = {
 }
 
 
-def _load(system: System, path: Path) -> ServerSetupConfig:
+def _load_text(system: System, path: Path) -> str:
     text = system.read_text(path)
     if text is None:
         raise ConfigError(f"Unable to read configuration {path}: file does not exist")
-    return parse_config(text)
+    parse_config(text)
+    return text
+
+
+def _load(system: System, path: Path) -> ServerSetupConfig:
+    return parse_config(_load_text(system, path))
 
 
 def _core(config: ServerSetupConfig, system: System) -> ServerSetupCore:
@@ -127,6 +144,15 @@ def _confirm_apply(plan: Plan, *, yes: bool, allow_dangerous: bool) -> None:
         raise ModuleApplyError("Apply cancelled")
 
 
+def _confirm_mutation(prompt: str, *, yes: bool) -> None:
+    if yes:
+        return
+    if not sys.stdin.isatty():
+        raise ModuleApplyError("Refusing non-interactive maintenance without --yes")
+    if not _prompt_bool(prompt, False):
+        raise ModuleApplyError("Maintenance cancelled")
+
+
 def _apply(config: ServerSetupConfig, system: System, *, yes: bool, allow_dangerous: bool) -> int:
     _require_root(system)
     core = _core(config, system)
@@ -141,6 +167,135 @@ def _apply(config: ServerSetupConfig, system: System, *, yes: bool, allow_danger
     report = core.validate()
     _print_validation(report)
     return 0 if report.ok else 1
+
+
+def _drift_payload(plan: Plan, report: ValidationReport) -> dict[str, object]:
+    drift = plan.has_changes or not report.ok
+    return {
+        "changes": [
+            {
+                "action": change.action,
+                "details": change.details,
+                "kind": change.kind.value,
+                "module": change.module,
+                "summary": change.summary,
+                "target": change.target,
+            }
+            for change in plan.changes
+        ],
+        "drift": drift,
+        "validation": [
+            {
+                "details": result.details,
+                "module": result.module,
+                "status": result.status.value,
+                "summary": result.summary,
+            }
+            for result in report.results
+        ],
+    }
+
+
+def _drift(config: ServerSetupConfig, system: System, *, as_json: bool) -> int:
+    core = _core(config, system)
+    plan = core.plan()
+    report = core.validate()
+    payload = _drift_payload(plan, report)
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif payload["drift"]:
+        print("Drift detected.")
+        _print_plan(plan)
+        _print_validation(report)
+    else:
+        print("No drift.")
+    return 1 if payload["drift"] else 0
+
+
+def _snapshot(config_text: str, system: System, output: Path) -> int:
+    snapshot = capture_snapshot(system, config_text)
+    system.write_text(output, render_snapshot(snapshot), mode=0o600)
+    print(f"Maintenance snapshot written to {output}")
+    return 0
+
+
+def _upgrade(
+    config: ServerSetupConfig,
+    config_text: str,
+    system: System,
+    *,
+    snapshot_path: Path,
+    yes: bool,
+) -> int:
+    _require_root(system)
+    core = _core(config, system)
+    plan = core.plan()
+    report = core.validate()
+    if plan.has_changes or not report.ok:
+        print("Refusing upgrade because the host has unreconciled drift.")
+        _print_plan(plan)
+        _print_validation(report)
+        raise ModuleApplyError("Reconcile drift with plan/apply before upgrading managed host packages.")
+
+    _confirm_mutation("Upgrade server-setup-managed host packages?", yes=yes)
+    snapshot = capture_snapshot(system, config_text)
+    system.write_text(snapshot_path, render_snapshot(snapshot), mode=0o600)
+    packages = upgrade_managed_packages(system, snapshot.packages)
+
+    post_plan = core.plan()
+    post_report = core.validate()
+    if post_plan.has_changes or not post_report.ok:
+        print("Upgrade completed, but post-upgrade validation detected drift.")
+        _print_plan(post_plan)
+        _print_validation(post_report)
+        print(f"Rollback snapshot: {snapshot_path}")
+        return 1
+
+    print(f"Upgrade complete for {len(packages)} managed package(s).")
+    print(f"Rollback snapshot: {snapshot_path}")
+    return 0
+
+
+def _rollback(
+    config: ServerSetupConfig,
+    config_text: str,
+    system: System,
+    *,
+    snapshot_path: Path,
+    yes: bool,
+) -> int:
+    _require_root(system)
+    snapshot_text = system.read_text(snapshot_path)
+    if snapshot_text is None:
+        raise SnapshotError(f"Rollback snapshot {snapshot_path} does not exist")
+    snapshot = parse_snapshot(snapshot_text)
+    if snapshot.config_text != config_text:
+        raise SnapshotError("Current configuration differs from the rollback snapshot; refusing to combine config changes with package rollback.")
+
+    current_dokploy = current_dokploy_version(system)
+    if current_dokploy != snapshot.dokploy_version:
+        raise SnapshotError(
+            "Dokploy state changed since the snapshot; this rollback command only restores managed host package versions."
+        )
+
+    _confirm_mutation("Restore managed host packages to the snapshot versions?", yes=yes)
+    restored = rollback_package_versions(system, snapshot)
+    version_drift = package_version_drift(system, snapshot)
+
+    core = _core(config, system)
+    post_plan = core.plan()
+    post_report = core.validate()
+    if version_drift or post_plan.has_changes or not post_report.ok:
+        if version_drift:
+            for package, (current, expected) in sorted(version_drift.items()):
+                print(f"[FAIL] rollback: {package} is {current or '<missing>'}, expected {expected}")
+        _print_plan(post_plan)
+        _print_validation(post_report)
+        return 1
+
+    print(f"Rollback complete for {len(restored)} managed package(s).")
+    print(f"Snapshot retained at {snapshot_path}")
+    return 0
 
 
 def _doctor(config: ServerSetupConfig, system: System) -> int:
@@ -203,6 +358,24 @@ def build_parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate", help="Verify the configured host state")
     validate.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
 
+    drift = subparsers.add_parser("drift", help="Detect read-only desired-state drift")
+    drift.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    drift.add_argument("--json", action="store_true", help="Emit deterministic machine-readable evidence")
+
+    snapshot = subparsers.add_parser("snapshot", help="Capture config and exact managed package versions")
+    snapshot.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    snapshot.add_argument("--output", type=Path, default=DEFAULT_SNAPSHOT_PATH)
+
+    upgrade = subparsers.add_parser("upgrade", help="Safely upgrade only server-setup-managed apt packages")
+    upgrade.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    upgrade.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT_PATH)
+    upgrade.add_argument("--yes", action="store_true")
+
+    rollback = subparsers.add_parser("rollback", help="Restore exact managed package versions from the last snapshot")
+    rollback.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    rollback.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT_PATH)
+    rollback.add_argument("--yes", action="store_true")
+
     doctor = subparsers.add_parser("doctor", help="Run host validation plus capacity diagnostics")
     doctor.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     return parser
@@ -220,7 +393,9 @@ def run(argv: list[str] | None = None, *, system: System | None = None) -> int:
             if args.no_apply:
                 return 0
             return _apply(config, host_system, yes=args.yes, allow_dangerous=args.allow_dangerous)
-        config = _load(host_system, args.config)
+
+        config_text = _load_text(host_system, args.config)
+        config = parse_config(config_text)
         core = _core(config, host_system)
         if args.command == "plan":
             _print_plan(core.plan())
@@ -231,9 +406,17 @@ def run(argv: list[str] | None = None, *, system: System | None = None) -> int:
             report = core.validate()
             _print_validation(report)
             return 0 if report.ok else 1
+        if args.command == "drift":
+            return _drift(config, host_system, as_json=args.json)
+        if args.command == "snapshot":
+            return _snapshot(config_text, host_system, args.output)
+        if args.command == "upgrade":
+            return _upgrade(config, config_text, host_system, snapshot_path=args.snapshot, yes=args.yes)
+        if args.command == "rollback":
+            return _rollback(config, config_text, host_system, snapshot_path=args.snapshot, yes=args.yes)
         if args.command == "doctor":
             return _doctor(config, host_system)
-    except (ConfigError, ModuleApplyError, CommandError, OSError) as error:
+    except (ConfigError, SnapshotError, ModuleApplyError, CommandError, OSError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
     return 2
