@@ -4,6 +4,7 @@ import unittest
 
 from server_setup.config import ServerSetupConfig
 from server_setup.core import CoreError, ServerSetupCore
+from server_setup.modules import ModuleApplyError
 from server_setup.plan import Change, ChangeKind, Plan, ValidationResult, ValidationStatus
 
 
@@ -60,6 +61,25 @@ class ServerSetupCoreTests(unittest.TestCase):
         self.assertIs(returned, plan)
         self.assertEqual(module.calls, ["apply"])
         self.assertEqual(module.applied, [(plan.changes[0],)])
+
+    def test_apply_rejects_terminal_plan_before_any_module_mutates(self) -> None:
+        baseline = FakeModule("baseline")
+        dokploy = FakeModule("dokploy")
+        core = ServerSetupCore(ServerSetupConfig(), [baseline, dokploy])
+        plan = Plan(
+            (
+                Change("baseline", ChangeKind.UPDATE, "install host packages", action="install-packages"),
+                Change("dokploy", ChangeKind.DANGEROUS, "Dokploy edge ports are occupied", action="blocked"),
+            )
+        )
+
+        with self.assertRaisesRegex(ModuleApplyError, "blocked or deferred"):
+            core.apply(plan)
+
+        self.assertEqual(baseline.applied, [])
+        self.assertEqual(dokploy.applied, [])
+        self.assertNotIn("apply", baseline.calls)
+        self.assertNotIn("apply", dokploy.calls)
 
     def test_apply_skips_noop_entries(self) -> None:
         module = FakeModule("baseline", ChangeKind.NOOP)
