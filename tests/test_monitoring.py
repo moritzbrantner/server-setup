@@ -5,7 +5,7 @@ from typing import Mapping, Sequence
 
 from server_setup.config import parse_config
 from server_setup.core import ServerSetupCore
-from server_setup.modules import default_modules
+from server_setup.modules import ModuleApplyError, default_modules
 from server_setup.modules.monitoring import COMPOSE_PATH, MonitoringModule
 from server_setup.system import CommandResult
 from tests.fake_system import FakeSystem
@@ -29,10 +29,12 @@ uptime_kuma = true
 beszel = false
 '''
 
-DISABLED_CONFIG = MONITORING_CONFIG.replace("uptime_kuma = true", "uptime_kuma = false").replace(
+MONITORING_WITHOUT_DOKPLOY = MONITORING_CONFIG.replace(
     "enabled = true\nversion = \"v0.30.2\"",
     "enabled = false\nversion = \"v0.30.2\"",
 )
+
+DISABLED_CONFIG = MONITORING_WITHOUT_DOKPLOY.replace("uptime_kuma = true", "uptime_kuma = false")
 
 
 class MonitoringFakeSystem(FakeSystem):
@@ -80,6 +82,18 @@ class MonitoringTests(unittest.TestCase):
 
         self.assertEqual([change.action for change in plan], ["start-service"])
         self.assertEqual([change.target for change in plan], ["uptime-kuma"])
+
+    def test_monitoring_without_dokploy_blocks_before_any_host_mutation(self) -> None:
+        system = MonitoringFakeSystem()
+        config = parse_config(MONITORING_WITHOUT_DOKPLOY)
+        core = ServerSetupCore(config, default_modules(system))
+
+        plan = core.plan()
+
+        self.assertTrue(any(change.module == "monitoring" and change.action == "blocked" for change in plan.changes))
+        with self.assertRaises(ModuleApplyError):
+            core.apply(plan)
+        self.assertFalse(system.installed)
 
     def test_dokploy_and_monitoring_converge_in_one_shared_apply(self) -> None:
         system = MonitoringFakeSystem()
