@@ -1,0 +1,21 @@
+name: Disposable real-host smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    # Intentionally never targets a GitHub-hosted runner. Attach the label only
+    # to a disposable local VM because this job installs Dokploy and changes the OS.
+    runs-on: [self-hosted, linux, x64, server-setup-disposable-vm]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run real-host bootstrap smoke
+        env:
+          SERVER_SETUP_DISPOSABLE_VM: "1"
+        run: sudo --preserve-env=SERVER_SETUP_DISPOSABLE_VM ./tests/real-host/smoke.sh

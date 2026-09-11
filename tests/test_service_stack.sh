@@ -2,14 +2,23 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+LEGACY_SETUP="$ROOT_DIR/scripts/legacy_setup.sh"
 ENV_EXAMPLE="$ROOT_DIR/services/.env.example"
 BASE="$ROOT_DIR/services/compose.yml"
 PUBLIC="$ROOT_DIR/services/compose.public.yml"
 
 bash -n "$ROOT_DIR/setup.sh"
-help_output="$(bash "$ROOT_DIR/setup.sh" --help)"
-grep -Fq -- '--cutover-preflight' <<<"$help_output"
-grep -Fq -- '--confirm-legacy-cutover-ready' <<<"$help_output"
+bash -n "$LEGACY_SETUP"
+
+new_help_output="$(bash "$ROOT_DIR/setup.sh" --help)"
+grep -Fq -- '--non-interactive' <<<"$new_help_output"
+grep -Fq -- '--allow-dangerous' <<<"$new_help_output"
+
+# Legacy cut-over behavior remains available through the compatibility path
+# while fresh installations move to the new Python host-management core.
+legacy_help_output="$(bash "$ROOT_DIR/setup.sh" --legacy --help)"
+grep -Fq -- '--cutover-preflight' <<<"$legacy_help_output"
+grep -Fq -- '--confirm-legacy-cutover-ready' <<<"$legacy_help_output"
 
 preflight_output="$(bash "$ROOT_DIR/setup.sh" --cutover-preflight)"
 grep -Fq 'Cut-over preflight (read-only)' <<<"$preflight_output"
@@ -29,10 +38,11 @@ confirmed_output="$(bash "$ROOT_DIR/setup.sh" --dry-run --replace-legacy --confi
 grep -Fq 'Installing pinned Dokploy release v0.30.2.' <<<"$confirmed_output"
 grep -Fq 'Dry run complete; no mutating commands above were executed.' <<<"$confirmed_output"
 
-grep -Fq "releases/download/\${DOKPLOY_VERSION}/install.sh" "$ROOT_DIR/setup.sh"
-grep -Fq 'restart_active_legacy_edge' "$ROOT_DIR/setup.sh"
-grep -Fq 'wait_for_dokploy_ready' "$ROOT_DIR/setup.sh"
-grep -Fq 'disable_legacy_edge' "$ROOT_DIR/setup.sh"
+grep -Fq "releases/download/\${DOKPLOY_VERSION}/install.sh" "$LEGACY_SETUP"
+grep -Fq 'restart_active_legacy_edge' "$LEGACY_SETUP"
+grep -Fq 'wait_for_dokploy_ready' "$LEGACY_SETUP"
+grep -Fq 'disable_legacy_edge' "$LEGACY_SETUP"
+grep -Fq 'exec "$BIN_PATH" setup' "$ROOT_DIR/setup.sh"
 
 docker compose --env-file "$ENV_EXAMPLE" -f "$BASE" config --quiet
 UPTIME_KUMA_HOST=status.example.com \
