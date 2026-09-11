@@ -90,6 +90,8 @@ install -d -m 0755 "$INSTALL_DIR"
 rm -rf "$INSTALL_DIR/server_setup"
 cp -a "$ROOT_DIR/server_setup" "$INSTALL_DIR/server_setup"
 cp "$ROOT_DIR/config.example.toml" "$INSTALL_DIR/config.example.toml"
+install -d -m 0755 "$INSTALL_DIR/services"
+cp "$ROOT_DIR/services/compose.yml" "$INSTALL_DIR/services/compose.yml"
 
 cat > "$BIN_PATH" <<EOF
 #!/usr/bin/env bash

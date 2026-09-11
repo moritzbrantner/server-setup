@@ -100,6 +100,8 @@ def _wizard(config: ServerSetupConfig) -> ServerSetupConfig:
     dokploy_version = config.dokploy.version
     if dokploy_enabled:
         dokploy_version = _prompt_text("Pinned Dokploy release", config.dokploy.version)
+    uptime_kuma = _prompt_bool("Run Uptime Kuma host monitoring?", config.monitoring.uptime_kuma)
+    beszel = _prompt_bool("Run Beszel host/container monitoring?", config.monitoring.beszel)
 
     return replace(
         config,
@@ -111,6 +113,7 @@ def _wizard(config: ServerSetupConfig) -> ServerSetupConfig:
             ssh_hardening=ssh_hardening,
         ),
         dokploy=replace(config.dokploy, enabled=dokploy_enabled, version=dokploy_version),
+        monitoring=replace(config.monitoring, uptime_kuma=uptime_kuma, beszel=beszel),
     )
 
 
