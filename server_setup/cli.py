@@ -11,7 +11,7 @@ from server_setup.config import ConfigError, DEFAULT_CONFIG_PATH, ServerSetupCon
 from server_setup.core import ServerSetupCore
 from server_setup.modules import ModuleApplyError, default_modules
 from server_setup.plan import ChangeKind, Plan, ValidationReport, ValidationStatus
-from server_setup.system import LocalSystem, System
+from server_setup.system import CommandError, LocalSystem, System
 
 STATUS_MARKERS = {
     ValidationStatus.PASS: "PASS",
@@ -233,7 +233,7 @@ def run(argv: list[str] | None = None, *, system: System | None = None) -> int:
             return 0 if report.ok else 1
         if args.command == "doctor":
             return _doctor(config, host_system)
-    except (ConfigError, ModuleApplyError, OSError) as error:
+    except (ConfigError, ModuleApplyError, CommandError, OSError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
     return 2
