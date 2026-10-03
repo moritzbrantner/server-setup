@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from server_setup.config import ServerSetupConfig
-from server_setup.modules import ServerModule
+from server_setup.modules import ModuleApplyError, ServerModule
 from server_setup.plan import ChangeKind, Plan, ValidationReport
+
+TERMINAL_ACTIONS = frozenset({"blocked", "deferred"})
 
 
 class CoreError(RuntimeError):
@@ -45,6 +47,11 @@ class ServerSetupCore:
         if unknown_modules:
             names = ", ".join(sorted(unknown_modules))
             raise CoreError(f"Plan contains changes for unknown module(s): {names}")
+
+        terminal_changes = tuple(change for change in selected_plan.changes if change.action in TERMINAL_ACTIONS)
+        if terminal_changes:
+            reasons = "; ".join(f"{change.module}: {change.summary}" for change in terminal_changes)
+            raise ModuleApplyError(f"Refusing to apply a plan with blocked or deferred changes: {reasons}")
 
         for module in self.modules:
             changes = tuple(change for change in selected_plan.for_module(module.name) if change.kind is not ChangeKind.NOOP)
