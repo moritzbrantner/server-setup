@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 CONFIG_VERSION = 1
 DEFAULT_CONFIG_PATH = Path("/etc/server-setup/config.toml")
 DEFAULT_DOKPLOY_VERSION = "v0.30.2"
+_DOKPLOY_VERSION_RE = re.compile(r"^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 class ConfigError(ValueError):
@@ -70,8 +72,7 @@ _SECTION_KEYS = {
 def _unknown_keys(values: dict[str, Any], allowed: set[str], location: str) -> None:
     unknown = sorted(set(values) - allowed)
     if unknown:
-        names = ", ".join(unknown)
-        raise ConfigError(f"Unknown key(s) in {location}: {names}")
+        raise ConfigError(f"Unknown key(s) in {location}: {', '.join(unknown)}")
 
 
 def _section(raw: dict[str, Any], name: str) -> dict[str, Any]:
@@ -96,34 +97,34 @@ def _string(section: dict[str, Any], key: str, default: str, location: str) -> s
     return value.strip()
 
 
-def parse_config(text: str) -> ServerSetupConfig:
-    """Parse and semantically validate a v1 TOML configuration."""
+def _dokploy_version(section: dict[str, Any], default: str) -> str:
+    value = _string(section, "version", default, "dokploy")
+    if not _DOKPLOY_VERSION_RE.fullmatch(value):
+        raise ConfigError("dokploy.version must be an exact pinned release such as v0.30.2")
+    return value
 
+
+def parse_config(text: str) -> ServerSetupConfig:
     try:
         raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"Invalid TOML: {error}") from error
-
     _unknown_keys(raw, _TOP_LEVEL_KEYS, "configuration root")
-
     version = raw.get("version")
     if type(version) is not int:
         raise ConfigError("version must be an integer")
     if version != CONFIG_VERSION:
         raise ConfigError(f"Unsupported config version {version}; expected {CONFIG_VERSION}")
-
     host = _section(raw, "host")
     security = _section(raw, "security")
     dokploy = _section(raw, "dokploy")
     dns = _section(raw, "dns")
     monitoring = _section(raw, "monitoring")
-
     host_defaults = HostConfig()
     security_defaults = SecurityConfig()
     dokploy_defaults = DokployConfig()
     dns_defaults = DnsConfig()
     monitoring_defaults = MonitoringConfig()
-
     return ServerSetupConfig(
         version=version,
         host=HostConfig(
@@ -137,7 +138,7 @@ def parse_config(text: str) -> ServerSetupConfig:
         ),
         dokploy=DokployConfig(
             enabled=_bool(dokploy, "enabled", dokploy_defaults.enabled, "dokploy"),
-            version=_string(dokploy, "version", dokploy_defaults.version, "dokploy"),
+            version=_dokploy_version(dokploy, dokploy_defaults.version),
         ),
         dns=DnsConfig(enabled=_bool(dns, "enabled", dns_defaults.enabled, "dns")),
         monitoring=MonitoringConfig(
@@ -148,8 +149,6 @@ def parse_config(text: str) -> ServerSetupConfig:
 
 
 def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> ServerSetupConfig:
-    """Load a server-setup configuration from disk."""
-
     config_path = Path(path)
     try:
         text = config_path.read_text(encoding="utf-8")
@@ -167,34 +166,22 @@ def _toml_bool(value: bool) -> str:
 
 
 def render_config(config: ServerSetupConfig) -> str:
-    """Render the supported v1 model as deterministic TOML."""
-
     if config.version != CONFIG_VERSION:
         raise ConfigError(f"Unsupported config version {config.version}; expected {CONFIG_VERSION}")
-
-    return "\n".join(
-        [
-            f"version = {config.version}",
-            "",
-            "[host]",
-            f"timezone = {_toml_string(config.host.timezone)}",
-            f"unattended_upgrades = {_toml_bool(config.host.unattended_upgrades)}",
-            "",
-            "[security]",
-            f"firewall = {_toml_bool(config.security.firewall)}",
-            f"fail2ban = {_toml_bool(config.security.fail2ban)}",
-            f"ssh_hardening = {_toml_bool(config.security.ssh_hardening)}",
-            "",
-            "[dokploy]",
-            f"enabled = {_toml_bool(config.dokploy.enabled)}",
-            f"version = {_toml_string(config.dokploy.version)}",
-            "",
-            "[dns]",
-            f"enabled = {_toml_bool(config.dns.enabled)}",
-            "",
-            "[monitoring]",
-            f"uptime_kuma = {_toml_bool(config.monitoring.uptime_kuma)}",
-            f"beszel = {_toml_bool(config.monitoring.beszel)}",
-            "",
-        ]
-    )
+    return "\n".join([
+        f"version = {config.version}", "",
+        "[host]",
+        f"timezone = {_toml_string(config.host.timezone)}",
+        f"unattended_upgrades = {_toml_bool(config.host.unattended_upgrades)}", "",
+        "[security]",
+        f"firewall = {_toml_bool(config.security.firewall)}",
+        f"fail2ban = {_toml_bool(config.security.fail2ban)}",
+        f"ssh_hardening = {_toml_bool(config.security.ssh_hardening)}", "",
+        "[dokploy]",
+        f"enabled = {_toml_bool(config.dokploy.enabled)}",
+        f"version = {_toml_string(config.dokploy.version)}", "",
+        "[dns]", f"enabled = {_toml_bool(config.dns.enabled)}", "",
+        "[monitoring]",
+        f"uptime_kuma = {_toml_bool(config.monitoring.uptime_kuma)}",
+        f"beszel = {_toml_bool(config.monitoring.beszel)}", "",
+    ])

@@ -20,6 +20,8 @@ class Change:
     kind: ChangeKind
     summary: str
     details: str | None = None
+    action: str | None = None
+    target: str | None = None
 
     def __post_init__(self) -> None:
         if not self.module.strip():
