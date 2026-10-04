@@ -25,15 +25,23 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: 22.23.2
           cache: npm
           cache-dependency-path: monitor/webapp/package-lock.json
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y jq shellcheck python3 pipx
-          pipx install ruff
+          pipx install ruff==0.16.6
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Record tool versions
+        run: |
+          node --version
+          npm --version
+          python3 --version
+          ruff --version
+          shellcheck --version
+          jq --version
       - name: Run repository test suite
         run: ./tests/run-tests.sh
 
