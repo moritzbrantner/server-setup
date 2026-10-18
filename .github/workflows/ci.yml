@@ -10,13 +10,16 @@ permissions:
 
 # Same-repository branch pushes are first-class because coding agents and
 # connector-authored PRs may not emit a usable pull_request check run. Both
-# event types validate the same head SHA; concurrency collapses duplicate work.
+# event types validate the same head SHA. Same-repository PR jobs yield to the
+# authoritative push run; fork PRs validate here. A separate no-op PR concurrency
+# group prevents that skipped run from cancelling the actual push validation.
 concurrency:
-  group: server-setup-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  group: server-setup-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && 'duplicate-pr' || 'validation' }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
   test:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -46,6 +49,7 @@ jobs:
         run: ./tests/run-tests.sh
 
   host-sandbox:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository }}
     name: Host sandbox (${{ matrix.base_image }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -60,3 +64,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run idempotent host bootstrap
         run: ./tests/host-sandbox/run.sh "${{ matrix.base_image }}"
+
+  merge-ready:
+    name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) && 'merge-ready' || 'PR uses branch-push validation' }}
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
+    needs: [test, host-sandbox]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: moritzbrantner/reusable-workflows/.github/actions/merge-ready@b0f25f241d76af2584dfc9e375084ff5c5cb97da
+        with:
+          needs: ${{ toJSON(needs) }}
+          required: '["test", "host-sandbox"]'
