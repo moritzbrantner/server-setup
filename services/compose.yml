@@ -14,7 +14,7 @@ services:
       - ops
 
   beszel:
-    image: henrygd/beszel:0.18.8
+    image: henrygd/beszel:0.18.8@sha256:4c51486968efa0b0a702c1b0967966a2e06fb250b7418f3072d2488faea27c51
     restart: unless-stopped
     environment:
       APP_URL: "${BESZEL_APP_URL:-http://127.0.0.1:8090}"
@@ -29,7 +29,7 @@ services:
       - ops
 
   beszel-agent:
-    image: henrygd/beszel-agent:0.18.8
+    image: henrygd/beszel-agent:0.18.8@sha256:3b1939746690e423072b4a99bf4c4af6dd9562a68978a33738a3c4a4cc000c39
     profiles:
       - agent
     restart: unless-stopped
