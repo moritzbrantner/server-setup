@@ -14,7 +14,7 @@ services:
       - ops
 
   beszel:
-    image: henrygd/beszel:0.18.8@sha256:4c51486968efa0b0a702c1b0967966a2e06fb250b7418f3072d2488faea27c51
+    image: henrygd/beszel:0.21.0@sha256:6b39a8b64f9b15d00a25e7683e31a93c46161182a54f62713525107064e10599
     restart: unless-stopped
     environment:
       APP_URL: "${BESZEL_APP_URL:-http://127.0.0.1:8090}"
