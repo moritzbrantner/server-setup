@@ -36,7 +36,7 @@ services:
         condition: service_healthy
 
   test-db:
-    image: postgres:16@sha256:1beaa3084eee2676f20a9cd9928f0bf2c5bf674f8e49f81017912183d377c61c
+    image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
     container_name: server-setup-test-db
     environment:
       POSTGRES_DB: server_setup
